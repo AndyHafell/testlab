@@ -1,0 +1,1144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PIXEL PUPPET — VTuber Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #14141f;
+    --panel: #1d1d2c;
+    --panel2: #24243a;
+    --border: #34344f;
+    --text: #d8d8e8;
+    --dim: #8a8aa5;
+    --accent: #4ade80;
+    --accent2: #f472b6;
+    --danger: #ef4444;
+    --pix: "Press Start 2P", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 16px;
+    border-bottom: 2px solid var(--border);
+    background: var(--panel);
+    flex: 0 0 auto;
+  }
+  header h1 {
+    font-family: var(--pix);
+    font-size: 14px;
+    margin: 0;
+    color: var(--accent);
+    letter-spacing: 1px;
+    text-shadow: 2px 2px 0 #0a3d22;
+  }
+  header .sub { color: var(--dim); font-size: 11px; }
+  #status {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--dim);
+  }
+  #statusDot {
+    width: 10px; height: 10px;
+    background: #eab308;
+    box-shadow: 0 0 6px #eab308;
+  }
+  main { flex: 1; display: flex; min-height: 0; }
+  #stageArea {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    min-width: 0;
+    gap: 10px;
+  }
+  #stageWrap { position: relative; width: 100%; max-width: 1200px; }
+  #stage {
+    width: 100%;
+    display: block;
+    border: 2px solid var(--border);
+    image-rendering: pixelated;
+    background: #000;
+    cursor: default;
+  }
+  #stage.editing { cursor: grab; }
+  #stage.dragging { cursor: grabbing; }
+  #recBadge {
+    position: absolute;
+    top: 12px; left: 12px;
+    display: none;
+    align-items: center;
+    gap: 8px;
+    background: rgba(0,0,0,.65);
+    border: 1px solid var(--danger);
+    padding: 6px 10px;
+    font-family: var(--pix);
+    font-size: 10px;
+    color: #fff;
+  }
+  #recBadge.on { display: flex; }
+  #recBadge .dot {
+    width: 10px; height: 10px;
+    background: var(--danger);
+    animation: blinkRec 1s steps(2, start) infinite;
+  }
+  @keyframes blinkRec { 50% { opacity: 0; } }
+  #editHint {
+    position: absolute;
+    bottom: 12px; left: 12px;
+    display: none;
+    background: rgba(0,0,0,.65);
+    border: 1px solid var(--accent2);
+    padding: 6px 10px;
+    font-size: 11px;
+    color: var(--accent2);
+  }
+  #stageWrap.editing #editHint { display: block; }
+  #stageBar {
+    width: 100%;
+    max-width: 1200px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  aside {
+    width: 312px;
+    flex: 0 0 312px;
+    background: var(--panel);
+    border-left: 2px solid var(--border);
+    overflow-y: auto;
+    padding: 12px;
+  }
+  .group {
+    border: 1px solid var(--border);
+    background: var(--panel2);
+    margin-bottom: 12px;
+    padding: 10px;
+  }
+  .group h2 {
+    font-family: var(--pix);
+    font-size: 9px;
+    margin: 0 0 10px;
+    color: var(--accent);
+    letter-spacing: 1px;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .row:last-child { margin-bottom: 0; }
+  .row label { flex: 0 0 92px; color: var(--dim); font-size: 11px; }
+  .row input[type=range] { flex: 1; accent-color: var(--accent); min-width: 0; }
+  .row input[type=color] {
+    width: 36px; height: 24px;
+    border: 1px solid var(--border);
+    background: none;
+    padding: 0;
+    cursor: pointer;
+  }
+  .row .val { flex: 0 0 34px; text-align: right; color: var(--dim); font-size: 10px; }
+  .btn {
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 11px;
+    padding: 7px 10px;
+    cursor: pointer;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.active {
+    background: var(--accent);
+    color: #0c2616;
+    border-color: var(--accent);
+    font-weight: bold;
+  }
+  .btn.danger { border-color: var(--danger); color: var(--danger); }
+  .btn.danger.active { background: var(--danger); color: #fff; }
+  .btn.big {
+    font-family: var(--pix);
+    font-size: 10px;
+    padding: 12px 14px;
+    flex: 1;
+  }
+  .btnRow { display: flex; gap: 6px; flex-wrap: wrap; }
+  .btnRow .btn { flex: 1 1 auto; }
+  .check { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 11px; cursor: pointer; }
+  .check input { accent-color: var(--accent); }
+  #previewWrap { position: relative; width: 100%; aspect-ratio: 4/3; background: #000; border: 1px solid var(--border); overflow: hidden; }
+  #cam { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #previewWrap.mirrored #cam, #previewWrap.mirrored #previewOverlay { transform: scaleX(-1); }
+  #previewOverlay { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #lastRec { font-size: 11px; }
+  #lastRec a { color: var(--accent); }
+  footer {
+    flex: 0 0 auto;
+    padding: 6px 16px;
+    border-top: 2px solid var(--border);
+    background: var(--panel);
+    color: var(--dim);
+    font-size: 10px;
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  kbd {
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    padding: 1px 5px;
+    font-size: 10px;
+  }
+  input[type=file] { display: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>PIXEL PUPPET</h1>
+  <span class="sub">vtuber studio for faceless creators</span>
+  <div id="status"><div id="statusDot"></div><span id="statusText">booting…</span></div>
+</header>
+
+<main>
+  <div id="stageArea">
+    <div id="stageWrap">
+      <canvas id="stage" width="1280" height="720"></canvas>
+      <div id="recBadge"><div class="dot"></div><span id="recTime">REC 00:00</span></div>
+      <div id="editHint">EDIT MODE — drag the EYES and MOUTH markers onto your avatar's face</div>
+    </div>
+    <div id="stageBar">
+      <button class="btn big danger" id="recBtn">&#9210; RECORD</button>
+      <button class="btn big" id="greenBtn">GREEN SCREEN</button>
+      <button class="btn big" id="editBtn">EDIT FACE</button>
+    </div>
+  </div>
+
+  <aside>
+    <div class="group">
+      <h2>CAMERA</h2>
+      <div id="previewWrap" class="mirrored">
+        <video id="cam" autoplay playsinline muted></video>
+        <canvas id="previewOverlay" width="320" height="240"></canvas>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="check"><input type="checkbox" id="mirrorChk" checked> mirror movement</label>
+        <button class="btn" id="camRetryBtn" style="margin-left:auto;display:none">retry camera</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2>AVATAR</h2>
+      <div class="btnRow" style="margin-bottom:8px">
+        <button class="btn" id="loadAvatarBtn">load image…</button>
+        <button class="btn" id="defaultAvatarBtn">pixel crab</button>
+      </div>
+      <input type="file" id="avatarFile" accept="image/*">
+      <div class="row"><label>size</label><input type="range" id="avatarScale" min="0.2" max="1.2" step="0.01"><span class="val" id="avatarScaleVal"></span></div>
+      <div class="row"><label>pixelation</label><input type="range" id="pixelRes" min="32" max="256" step="8"><span class="val" id="pixelResVal"></span></div>
+      <div class="row"><label>eye size</label><input type="range" id="eyeSize" min="0.03" max="0.2" step="0.005"><span class="val" id="eyeSizeVal"></span></div>
+      <div class="row"><label>eye spacing</label><input type="range" id="eyeSpacing" min="0.05" max="0.6" step="0.01"><span class="val" id="eyeSpacingVal"></span></div>
+      <div class="row"><label>mouth size</label><input type="range" id="mouthSize" min="0.06" max="0.35" step="0.01"><span class="val" id="mouthSizeVal"></span></div>
+      <div class="row">
+        <label class="check"><input type="checkbox" id="showEyes" checked> eyes</label>
+        <label class="check"><input type="checkbox" id="showMouth" checked> mouth</label>
+        <label class="check"><input type="checkbox" id="stripWhite"> strip white bg</label>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2>TRACKING</h2>
+      <div class="row"><label>blink sens.</label><input type="range" id="blinkSens" min="0.5" max="2" step="0.05"><span class="val" id="blinkSensVal"></span></div>
+      <div class="row"><label>mouth sens.</label><input type="range" id="mouthSens" min="0.5" max="3" step="0.05"><span class="val" id="mouthSensVal"></span></div>
+      <div class="row"><label>head motion</label><input type="range" id="motion" min="0" max="2" step="0.05"><span class="val" id="motionVal"></span></div>
+      <div class="row"><label>smoothing</label><input type="range" id="smoothing" min="0.05" max="0.9" step="0.05"><span class="val" id="smoothingVal"></span></div>
+    </div>
+
+    <div class="group">
+      <h2>BACKGROUND</h2>
+      <div class="btnRow">
+        <button class="btn bgBtn" data-bg="green">green</button>
+        <button class="btn bgBtn" data-bg="magenta">magenta</button>
+        <button class="btn bgBtn" data-bg="night">night</button>
+        <button class="btn bgBtn" data-bg="sunset">sunset</button>
+        <button class="btn bgBtn" data-bg="color">color</button>
+        <button class="btn bgBtn" data-bg="image">image…</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label>custom color</label>
+        <input type="color" id="bgColor" value="#22223a">
+      </div>
+      <input type="file" id="bgFile" accept="image/*">
+    </div>
+
+    <div class="group">
+      <h2>RECORDING</h2>
+      <div class="row">
+        <label class="check"><input type="checkbox" id="micChk" checked> record mic audio</label>
+      </div>
+      <div id="lastRec">no recording yet</div>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  <span><kbd>R</kbd> record</span>
+  <span><kbd>G</kbd> green screen</span>
+  <span><kbd>E</kbd> edit face</span>
+  <span>OBS: window-capture this page in green screen mode + chroma key filter</span>
+  <span>tip: serve with <code>python3 -m http.server</code> for ./crab.png auto-load</span>
+</footer>
+
+<script type="module">
+/* ============================================================
+   PIXEL PUPPET — single-file VTuber studio
+   Face tracking: MediaPipe FaceLandmarker (blendshapes + landmarks)
+   ============================================================ */
+
+const STAGE_W = 1280, STAGE_H = 720;
+
+const stage = document.getElementById('stage');
+const ctx = stage.getContext('2d');
+const video = document.getElementById('cam');
+const previewOverlay = document.getElementById('previewOverlay');
+const pctx = previewOverlay.getContext('2d');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+
+/* ---------------- settings ---------------- */
+
+const DEFAULTS = {
+  avatarScale: 0.62,
+  pixelRes: 96,
+  eyesX: 0.5, eyeY: 0.40,
+  eyeSpacing: 0.30,
+  mouthX: 0.5, mouthY: 0.62,
+  eyeSize: 0.09,
+  mouthSize: 0.16,
+  showEyes: true, showMouth: true, stripWhite: false,
+  blinkSens: 1.0, mouthSens: 1.6, motion: 1.0, smoothing: 0.35,
+  mirror: true,
+  bgType: 'night', bgColor: '#22223a',
+  micOnRecord: true,
+};
+
+let S = { ...DEFAULTS };
+try {
+  const saved = JSON.parse(localStorage.getItem('pixelpuppet-settings') || 'null');
+  if (saved && typeof saved === 'object') S = { ...DEFAULTS, ...saved };
+} catch (e) { /* corrupted settings — use defaults */ }
+
+let saveTimer = null;
+function saveSettings() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem('pixelpuppet-settings', JSON.stringify(S)); } catch (e) {}
+  }, 300);
+}
+
+/* ---------------- status ---------------- */
+
+function setStatus(text, color) {
+  statusText.textContent = text;
+  statusDot.style.background = color;
+  statusDot.style.boxShadow = `0 0 6px ${color}`;
+}
+
+/* ---------------- tracking state ---------------- */
+
+const raw = { face: false, blinkL: 0, blinkR: 0, jaw: 0, smile: 0, roll: 0, dx: 0, dy: 0 };
+const sm  = { blinkL: 0, blinkR: 0, jaw: 0, smile: 0, roll: 0, dx: 0, dy: 0 };
+let lastLandmarks = null;
+
+// idle auto-blink when no face is tracked, so the avatar stays alive
+let nextIdleBlink = 2000, idleBlinkUntil = 0;
+
+let landmarker = null;
+let lastVideoTime = -1;
+let camReady = false;
+let micTrackAvailable = false;
+let mediaStream = null;
+
+/* ---------------- avatar ---------------- */
+
+let avatarSourceImg = null;   // original Image or canvas
+let avatarImg = null;         // possibly white-stripped version actually drawn
+let avatarAspect = 1;
+const offscreen = document.createElement('canvas');
+const offctx = offscreen.getContext('2d');
+
+function stripWhitePixels(src) {
+  const c = document.createElement('canvas');
+  c.width = src.naturalWidth || src.width;
+  c.height = src.naturalHeight || src.height;
+  const x = c.getContext('2d');
+  x.drawImage(src, 0, 0);
+  try {
+    const d = x.getImageData(0, 0, c.width, c.height);
+    const p = d.data;
+    for (let i = 0; i < p.length; i += 4) {
+      if (p[i] > 238 && p[i + 1] > 238 && p[i + 2] > 238) p[i + 3] = 0;
+    }
+    x.putImageData(d, 0, 0);
+    return c;
+  } catch (e) {
+    return src; // tainted — can't process, use as-is
+  }
+}
+
+function applyAvatar() {
+  if (!avatarSourceImg) return;
+  avatarImg = S.stripWhite ? stripWhitePixels(avatarSourceImg) : avatarSourceImg;
+  const w = avatarImg.naturalWidth || avatarImg.width;
+  const h = avatarImg.naturalHeight || avatarImg.height;
+  avatarAspect = w / h;
+}
+
+function setAvatarSource(imgOrCanvas) {
+  avatarSourceImg = imgOrCanvas;
+  applyAvatar();
+}
+
+/* Built-in fallback: a procedural pixel crab. Drawn smooth here — the
+   pixelation pipeline re-quantizes it to the chosen resolution anyway. */
+function makePixelCrab() {
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 128;
+  const x = c.getContext('2d');
+  const R = '#e8543f', D = '#a93226', L = '#f4836f';
+
+  // legs
+  x.strokeStyle = D; x.lineWidth = 5; x.lineCap = 'round';
+  for (const [sx, sy, ex, ey] of [
+    [34, 86, 16, 104], [40, 94, 26, 112], [50, 100, 42, 116],
+    [94, 86, 112, 104], [88, 94, 102, 112], [78, 100, 86, 116],
+  ]) { x.beginPath(); x.moveTo(sx, sy); x.lineTo(ex, ey); x.stroke(); }
+
+  // arms to claws
+  x.lineWidth = 8;
+  x.beginPath(); x.moveTo(36, 64); x.lineTo(20, 48); x.stroke();
+  x.beginPath(); x.moveTo(92, 64); x.lineTo(108, 48); x.stroke();
+
+  // claws (circle with a wedge notch)
+  for (const [cx, cy, flip] of [[18, 38, -1], [110, 38, 1]]) {
+    x.fillStyle = R;
+    x.beginPath(); x.arc(cx, cy, 14, 0, Math.PI * 2); x.fill();
+    x.strokeStyle = D; x.lineWidth = 3; x.stroke();
+    x.save();
+    x.globalCompositeOperation = 'destination-out';
+    x.beginPath();
+    x.moveTo(cx, cy);
+    x.lineTo(cx + flip * 18, cy - 14);
+    x.lineTo(cx + flip * 18, cy - 2);
+    x.closePath(); x.fill();
+    x.restore();
+  }
+
+  // body
+  x.fillStyle = D;
+  x.beginPath(); x.ellipse(64, 72, 34, 28, 0, 0, Math.PI * 2); x.fill();
+  x.fillStyle = R;
+  x.beginPath(); x.ellipse(64, 70, 31, 25, 0, 0, Math.PI * 2); x.fill();
+  x.fillStyle = L;
+  x.beginPath(); x.ellipse(56, 60, 12, 8, -0.4, 0, Math.PI * 2); x.fill();
+
+  return c;
+}
+
+/* Auto-load ./crab.png. Works when served over http; under file:// the
+   image may taint canvases, so probe on a scratch canvas first — the main
+   stage must never be tainted or recording breaks. */
+function tryAutoLoadCrab() {
+  const img = new Image();
+  img.onload = () => {
+    const probe = document.createElement('canvas');
+    probe.width = probe.height = 4;
+    const px = probe.getContext('2d');
+    px.drawImage(img, 0, 0, 4, 4);
+    try {
+      px.getImageData(0, 0, 1, 1);
+      setAvatarSource(img);
+      setStatus('loaded ./crab.png', '#4ade80');
+    } catch (e) {
+      console.warn('crab.png loaded but tainted the canvas (file:// page). Use "load image…" instead.');
+    }
+  };
+  img.onerror = () => { /* not found / blocked — keep default crab */ };
+  img.src = './crab.png';
+}
+
+function loadAvatarFromFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      setAvatarSource(img);
+      // persist small avatars so they survive reload
+      if (reader.result.length < 1_500_000) {
+        try { localStorage.setItem('pixelpuppet-avatar', reader.result); } catch (e) {}
+      }
+    };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+/* ---------------- backgrounds ---------------- */
+
+let bgImage = null;
+
+function lcg(seed) {
+  let s = seed >>> 0;
+  return () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296;
+}
+
+function drawSunset(g) {
+  const bands = ['#2d1b4e', '#5a2a6e', '#963d6c', '#d35d6e', '#f08f6a', '#ffc46b'];
+  const horizon = STAGE_H * 0.74;
+  const bh = horizon / bands.length;
+  bands.forEach((col, i) => {
+    g.fillStyle = col;
+    g.fillRect(0, Math.floor(i * bh), STAGE_W, Math.ceil(bh) + 1);
+  });
+  // pixel sun: quantized scanlines
+  g.fillStyle = '#fff1a8';
+  const sx = STAGE_W * 0.7, sy = horizon - 10, r = 110, step = 12;
+  for (let y = -r; y < 0; y += step) {
+    const hw = Math.sqrt(r * r - y * y);
+    g.fillRect(Math.floor((sx - hw) / step) * step, Math.floor((sy + y) / step) * step,
+               Math.ceil((hw * 2) / step) * step, step);
+  }
+  // ground + hills
+  g.fillStyle = '#1d1135';
+  g.fillRect(0, horizon, STAGE_W, STAGE_H - horizon);
+  const rnd = lcg(7);
+  for (let i = 0; i < 9; i++) {
+    const w = 90 + rnd() * 200, h = 14 + rnd() * 48;
+    g.fillRect(Math.floor(rnd() * STAGE_W - w / 2), horizon - h, w, h);
+  }
+}
+
+function drawNight(g) {
+  const bands = ['#0b0b1e', '#101230', '#16183e', '#1d2050'];
+  const bh = STAGE_H / bands.length;
+  bands.forEach((col, i) => {
+    g.fillStyle = col;
+    g.fillRect(0, Math.floor(i * bh), STAGE_W, Math.ceil(bh) + 1);
+  });
+  const rnd = lcg(1234);
+  for (let i = 0; i < 90; i++) {
+    const b = rnd();
+    g.fillStyle = b > 0.8 ? '#ffffff' : '#9aa3ff';
+    const s = b > 0.9 ? 4 : 2;
+    g.fillRect(Math.floor(rnd() * STAGE_W), Math.floor(rnd() * STAGE_H * 0.65), s, s);
+  }
+  // pixel moon
+  g.fillStyle = '#e8e8d8';
+  const mx = STAGE_W * 0.82, my = STAGE_H * 0.18, r = 56, step = 8;
+  for (let y = -r; y < r; y += step) {
+    const hw = Math.sqrt(Math.max(0, r * r - y * y));
+    g.fillRect(Math.floor((mx - hw) / step) * step, Math.floor((my + y) / step) * step,
+               Math.ceil((hw * 2) / step) * step, step);
+  }
+  g.fillStyle = '#c9c9b4';
+  g.fillRect(mx - 24, my - 8, 16, 16); g.fillRect(mx + 8, my + 16, 12, 12); g.fillRect(mx, my - 32, 10, 10);
+  // skyline
+  const rnd2 = lcg(99);
+  let bx = 0;
+  g.fillStyle = '#07071a';
+  while (bx < STAGE_W) {
+    const w = 60 + Math.floor(rnd2() * 110);
+    const h = 60 + Math.floor(rnd2() * 160);
+    g.fillRect(bx, STAGE_H - h, w, h);
+    bx += w + 8;
+  }
+  // lit windows
+  const rnd3 = lcg(31);
+  g.fillStyle = '#ffd866';
+  for (let i = 0; i < 60; i++) {
+    g.fillRect(Math.floor(rnd3() * STAGE_W), STAGE_H - 20 - Math.floor(rnd3() * 150), 6, 8);
+  }
+}
+
+function drawBackground(g) {
+  switch (S.bgType) {
+    case 'green':   g.fillStyle = '#00ff00'; g.fillRect(0, 0, STAGE_W, STAGE_H); break;
+    case 'magenta': g.fillStyle = '#ff00ff'; g.fillRect(0, 0, STAGE_W, STAGE_H); break;
+    case 'color':   g.fillStyle = S.bgColor; g.fillRect(0, 0, STAGE_W, STAGE_H); break;
+    case 'sunset':  drawSunset(g); break;
+    case 'image':
+      g.fillStyle = '#000'; g.fillRect(0, 0, STAGE_W, STAGE_H);
+      if (bgImage) {
+        const ia = bgImage.width / bgImage.height, sa = STAGE_W / STAGE_H;
+        let dw, dh;
+        if (ia > sa) { dh = STAGE_H; dw = dh * ia; } else { dw = STAGE_W; dh = dw / ia; }
+        g.drawImage(bgImage, (STAGE_W - dw) / 2, (STAGE_H - dh) / 2, dw, dh);
+      }
+      break;
+    case 'night':
+    default: drawNight(g);
+  }
+}
+
+function loadBgFromFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => { bgImage = img; };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+/* ---------------- face model + camera ---------------- */
+
+async function initTracking() {
+  setStatus('loading face model…', '#eab308');
+  try {
+    const vision = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs');
+    const fileset = await vision.FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+    landmarker = await vision.FaceLandmarker.createFromOptions(fileset, {
+      baseOptions: {
+        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+        delegate: 'GPU',
+      },
+      runningMode: 'VIDEO',
+      numFaces: 1,
+      outputFaceBlendshapes: true,
+    });
+  } catch (err) {
+    console.error('face model failed to load', err);
+    setStatus('face model failed (offline?) — avatar idles', '#ef4444');
+    return;
+  }
+  if (camReady) setStatus('tracking ready', '#4ade80');
+}
+
+async function initCamera() {
+  document.getElementById('camRetryBtn').style.display = 'none';
+  setStatus('requesting camera…', '#eab308');
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: 'user' },
+      audio: true,
+    });
+    micTrackAvailable = mediaStream.getAudioTracks().length > 0;
+  } catch (e) {
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: 'user' },
+      });
+      micTrackAvailable = false;
+    } catch (e2) {
+      console.error('camera failed', e2);
+      setStatus('camera blocked — allow access, then retry', '#ef4444');
+      document.getElementById('camRetryBtn').style.display = '';
+      return;
+    }
+  }
+  if (!micTrackAvailable) {
+    const mic = document.getElementById('micChk');
+    mic.checked = false; mic.disabled = true;
+    mic.parentElement.style.opacity = 0.5;
+    mic.parentElement.title = 'microphone unavailable';
+  }
+  video.srcObject = mediaStream;
+  try { await video.play(); } catch (e) {}
+  camReady = true;
+  if (landmarker) setStatus('tracking ready', '#4ade80');
+}
+
+const BS_USED = ['eyeBlinkLeft', 'eyeBlinkRight', 'jawOpen', 'mouthSmileLeft', 'mouthSmileRight'];
+
+function processFrame(now) {
+  if (!landmarker || !camReady || video.readyState < 2) return;
+  if (video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+
+  let res;
+  try { res = landmarker.detectForVideo(video, now); }
+  catch (e) { return; }
+
+  const lm = res.faceLandmarks && res.faceLandmarks[0];
+  lastLandmarks = lm || null;
+  if (!lm) { raw.face = false; return; }
+  raw.face = true;
+
+  const bs = {};
+  for (const n of BS_USED) bs[n] = 0;
+  const cats = res.faceBlendshapes && res.faceBlendshapes[0];
+  if (cats) for (const c of cats.categories) {
+    if (BS_USED.includes(c.categoryName)) bs[c.categoryName] = c.score;
+  }
+
+  raw.blinkL = bs.eyeBlinkLeft;
+  raw.blinkR = bs.eyeBlinkRight;
+  raw.jaw = bs.jawOpen;
+  raw.smile = (bs.mouthSmileLeft + bs.mouthSmileRight) / 2;
+
+  // head roll from the line between outer eye corners (33 = right, 263 = left)
+  const pR = lm[33], pL = lm[263];
+  raw.roll = Math.atan2(pL.y - pR.y, pL.x - pR.x);
+  const nose = lm[1];
+  raw.dx = nose.x - 0.5;
+  raw.dy = nose.y - 0.5;
+}
+
+function updateSmoothing(now) {
+  const a = S.smoothing;
+  if (raw.face) {
+    for (const k of ['blinkL', 'blinkR', 'jaw', 'smile', 'roll', 'dx', 'dy']) {
+      sm[k] += (raw[k] - sm[k]) * a;
+    }
+  } else {
+    // relax toward neutral, with occasional idle blinks
+    for (const k of ['jaw', 'smile', 'roll', 'dx', 'dy']) sm[k] += (0 - sm[k]) * a * 0.5;
+    if (now > nextIdleBlink) {
+      idleBlinkUntil = now + 140;
+      nextIdleBlink = now + 2200 + Math.random() * 3000;
+    }
+    const blink = now < idleBlinkUntil ? 1 : 0;
+    sm.blinkL += (blink - sm.blinkL) * 0.6;
+    sm.blinkR += (blink - sm.blinkR) * 0.6;
+  }
+}
+
+/* ---------------- avatar rendering ---------------- */
+
+function buildAvatarFrame(now) {
+  if (!avatarImg) return null;
+  const res = S.pixelRes;
+  let h = res, w = Math.max(8, Math.round(res * avatarAspect));
+  if (avatarAspect > 1) { w = res; h = Math.max(8, Math.round(res / avatarAspect)); }
+  if (offscreen.width !== w || offscreen.height !== h) {
+    offscreen.width = w; offscreen.height = h;
+  }
+  offctx.clearRect(0, 0, w, h);
+  offctx.imageSmoothingEnabled = false;
+  offctx.drawImage(avatarImg, 0, 0, w, h);
+
+  const mirror = S.mirror;
+  const dxm = mirror ? -sm.dx : sm.dx;
+
+  if (S.showEyes) {
+    const eW = Math.max(2, Math.round(S.eyeSize * res));
+    const cy = Math.round(S.eyeY * h);
+    const cx = Math.round(S.eyesX * w);
+    const half = Math.round(S.eyeSpacing * w / 2);
+    // viewer-left avatar eye mirrors the user's right eye when mirrored
+    const closeL = (mirror ? sm.blinkR : sm.blinkL) * S.blinkSens > 0.5;
+    const closeR = (mirror ? sm.blinkL : sm.blinkR) * S.blinkSens > 0.5;
+    drawEye(cx - half, cy, eW, closeL, dxm, sm.dy);
+    drawEye(cx + half, cy, eW, closeR, dxm, sm.dy);
+  }
+
+  if (S.showMouth) {
+    const open = Math.min(1, Math.max(0, sm.jaw * S.mouthSens));
+    drawMouth(Math.round(S.mouthX * w), Math.round(S.mouthY * h),
+              Math.max(3, Math.round(S.mouthSize * res)), open, sm.smile);
+  }
+  return offscreen;
+}
+
+function drawEye(cx, cy, size, closed, gx, gy) {
+  const g = offctx;
+  const x0 = cx - (size >> 1), y0 = cy - (size >> 1);
+  if (closed) {
+    g.fillStyle = '#15151d';
+    g.fillRect(x0 - 1, cy - Math.max(1, size >> 3), size + 2, Math.max(1, size >> 2));
+    return;
+  }
+  g.fillStyle = '#15151d';
+  g.fillRect(x0 - 1, y0 - 1, size + 2, size + 2); // outline
+  g.fillStyle = '#f5f5ef';
+  g.fillRect(x0, y0, size, size);                 // sclera
+  const p = Math.max(1, Math.round(size * 0.45)); // pupil follows gaze a little
+  const px = x0 + ((size - p) >> 1) + Math.round(gx * size * 1.6);
+  const py = y0 + ((size - p) >> 1) + Math.round(gy * size * 1.2);
+  g.fillStyle = '#15151d';
+  g.fillRect(Math.max(x0, Math.min(x0 + size - p, px)),
+             Math.max(y0, Math.min(y0 + size - p, py)), p, p);
+  if (size >= 5) { g.fillStyle = '#ffffff'; g.fillRect(x0 + size - 2, y0 + 1, 1, 1); }
+}
+
+function drawMouth(cx, cy, mw, open, smile) {
+  const g = offctx;
+  const x0 = cx - (mw >> 1);
+  if (open < 0.08) {
+    const lh = Math.max(1, Math.round(mw * 0.12));
+    g.fillStyle = '#15151d';
+    g.fillRect(x0, cy, mw, lh);
+    if (smile > 0.32) { // corners up
+      g.fillRect(x0 - lh, cy - lh, lh, lh);
+      g.fillRect(x0 + mw, cy - lh, lh, lh);
+    }
+    return;
+  }
+  const mh = Math.max(2, Math.round(mw * (0.2 + 0.8 * open)));
+  const y0 = cy - (mh >> 1);
+  g.fillStyle = '#15151d';
+  g.fillRect(x0 - 1, y0 - 1, mw + 2, mh + 2); // outline
+  g.fillStyle = '#7a1f2b';
+  g.fillRect(x0, y0, mw, mh);                 // interior
+  if (mh >= 5) {
+    g.fillStyle = '#f5f5ef';                  // teeth
+    g.fillRect(x0 + 1, y0, mw - 2, 1);
+    if (open > 0.55) {                        // tongue
+      const tw = Math.max(2, mw >> 1);
+      g.fillStyle = '#d96a6a';
+      g.fillRect(cx - (tw >> 1), y0 + mh - Math.max(2, mh >> 2), tw, Math.max(2, mh >> 2));
+    }
+  }
+}
+
+/* avatar placement on stage (shared by render + edit hit-testing) */
+function avatarLayout() {
+  const w = offscreen.width, h = offscreen.height;
+  const dh = STAGE_H * S.avatarScale;
+  const dw = dh * (w / h);
+  const mirror = S.mirror;
+  const dxm = mirror ? -sm.dx : sm.dx;
+  const anchorX = STAGE_W / 2 + (editMode ? 0 : dxm * S.motion * STAGE_W * 0.3);
+  const baseY = STAGE_H * 0.98;
+  const roll = editMode ? 0 : Math.max(-0.45, Math.min(0.45, (mirror ? -sm.roll : sm.roll) * S.motion * 0.8));
+  return { dw, dh, anchorX, baseY, roll };
+}
+
+function render(now) {
+  drawBackground(ctx);
+  const frame = buildAvatarFrame(now);
+  if (!frame) return;
+
+  const { dw, dh, anchorX, baseY, roll } = avatarLayout();
+  const open = Math.min(1, Math.max(0, sm.jaw * S.mouthSens));
+  const bob = editMode ? 0
+    : -open * dh * 0.025 + Math.sin(now / 1100) * dh * 0.006 + sm.dy * S.motion * STAGE_H * 0.1;
+
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.translate(anchorX, baseY);
+  ctx.rotate(roll);
+  ctx.drawImage(frame, -dw / 2, -dh + bob, dw, dh);
+  ctx.restore();
+
+  if (editMode) drawEditMarkers(dw, dh, anchorX, baseY);
+}
+
+function featureStagePos(which) {
+  const { dw, dh, anchorX, baseY } = avatarLayout();
+  const left = anchorX - dw / 2, top = baseY - dh;
+  if (which === 'eyes') return { x: left + S.eyesX * dw, y: top + S.eyeY * dh };
+  return { x: left + S.mouthX * dw, y: top + S.mouthY * dh };
+}
+
+function drawEditMarkers() {
+  for (const which of ['eyes', 'mouth']) {
+    const { x, y } = featureStagePos(which);
+    ctx.strokeStyle = which === 'eyes' ? '#4ade80' : '#f472b6';
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x - 14, y - 14, 28, 28);
+    ctx.beginPath(); ctx.moveTo(x - 20, y); ctx.lineTo(x + 20, y);
+    ctx.moveTo(x, y - 20); ctx.lineTo(x, y + 20); ctx.stroke();
+    ctx.font = 'bold 14px monospace';
+    ctx.fillText(which.toUpperCase(), x + 18, y - 18);
+  }
+}
+
+/* ---------------- edit mode (drag eyes/mouth) ---------------- */
+
+let editMode = false;
+let dragging = null;
+
+function setEditMode(on) {
+  editMode = on;
+  document.getElementById('editBtn').classList.toggle('active', on);
+  document.getElementById('stageWrap').classList.toggle('editing', on);
+  stage.classList.toggle('editing', on);
+}
+
+function stagePointFromEvent(e) {
+  const r = stage.getBoundingClientRect();
+  return {
+    x: (e.clientX - r.left) * (STAGE_W / r.width),
+    y: (e.clientY - r.top) * (STAGE_H / r.height),
+  };
+}
+
+stage.addEventListener('pointerdown', (e) => {
+  if (!editMode) return;
+  const p = stagePointFromEvent(e);
+  let best = null, bestD = 80; // px hit radius
+  for (const which of ['eyes', 'mouth']) {
+    const f = featureStagePos(which);
+    const d = Math.hypot(f.x - p.x, f.y - p.y);
+    if (d < bestD) { bestD = d; best = which; }
+  }
+  if (best) {
+    dragging = best;
+    stage.classList.add('dragging');
+    stage.setPointerCapture(e.pointerId);
+  }
+});
+
+stage.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const p = stagePointFromEvent(e);
+  const { dw, dh, anchorX, baseY } = avatarLayout();
+  const rx = Math.min(1, Math.max(0, (p.x - (anchorX - dw / 2)) / dw));
+  const ry = Math.min(1, Math.max(0, (p.y - (baseY - dh)) / dh));
+  if (dragging === 'eyes') { S.eyesX = rx; S.eyeY = ry; }
+  else { S.mouthX = rx; S.mouthY = ry; }
+  saveSettings();
+});
+
+function endDrag() { dragging = null; stage.classList.remove('dragging'); }
+stage.addEventListener('pointerup', endDrag);
+stage.addEventListener('pointercancel', endDrag);
+
+/* ---------------- webcam preview overlay ---------------- */
+
+function drawPreview() {
+  const w = previewOverlay.width, h = previewOverlay.height;
+  pctx.clearRect(0, 0, w, h);
+  if (!lastLandmarks) return;
+  pctx.fillStyle = 'rgba(74, 222, 128, 0.85)';
+  for (let i = 0; i < lastLandmarks.length; i += 8) {
+    const p = lastLandmarks[i];
+    pctx.fillRect(p.x * w - 1, p.y * h - 1, 2, 2);
+  }
+}
+
+/* ---------------- recording ---------------- */
+
+let recorder = null, recChunks = [], recStart = 0, recTimer = null, recUrl = null;
+const recBtn = document.getElementById('recBtn');
+const recBadge = document.getElementById('recBadge');
+const recTimeEl = document.getElementById('recTime');
+
+function pickMime() {
+  const types = [
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+    'video/mp4',
+  ];
+  for (const t of types) {
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return '';
+}
+
+function startRecording() {
+  if (!window.MediaRecorder) {
+    setStatus('MediaRecorder unsupported in this browser', '#ef4444');
+    return;
+  }
+  const canvasStream = stage.captureStream(60);
+  const tracks = [...canvasStream.getVideoTracks()];
+  if (document.getElementById('micChk').checked && mediaStream) {
+    // clone so stopping the recording doesn't kill the live mic track
+    tracks.push(...mediaStream.getAudioTracks().map((t) => t.clone()));
+  }
+  const stream = new MediaStream(tracks);
+  const mime = pickMime();
+  try {
+    recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  } catch (e) {
+    setStatus('recorder failed to start', '#ef4444');
+    return;
+  }
+  recChunks = [];
+  recorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
+  recorder.onstop = finishRecording;
+  recorder.start(1000);
+  recStart = performance.now();
+  recBtn.classList.add('active');
+  recBtn.innerHTML = '&#9209; STOP';
+  recBadge.classList.add('on');
+  recTimer = setInterval(() => {
+    const s = Math.floor((performance.now() - recStart) / 1000);
+    recTimeEl.textContent = `REC ${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+  }, 250);
+}
+
+function finishRecording() {
+  clearInterval(recTimer);
+  recorder.stream.getTracks().forEach((t) => t.stop());
+  recBadge.classList.remove('on');
+  recBtn.classList.remove('active');
+  recBtn.innerHTML = '&#9210; RECORD';
+  const type = recorder.mimeType || 'video/webm';
+  const blob = new Blob(recChunks, { type });
+  const ext = type.includes('mp4') ? 'mp4' : 'webm';
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const name = `vtuber-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.${ext}`;
+  if (recUrl) URL.revokeObjectURL(recUrl);
+  recUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = recUrl; a.download = name;
+  a.click();
+  const mb = (blob.size / 1048576).toFixed(1);
+  document.getElementById('lastRec').innerHTML =
+    `saved: <a href="${recUrl}" download="${name}">${name}</a> (${mb} MB)`;
+  recorder = null;
+}
+
+function toggleRecording() {
+  if (recorder && recorder.state === 'recording') recorder.stop();
+  else if (!recorder) startRecording();
+}
+
+/* ---------------- UI wiring ---------------- */
+
+function bindSlider(id, key, fmt) {
+  const el = document.getElementById(id);
+  const valEl = document.getElementById(id + 'Val');
+  el.value = S[key];
+  const show = () => { if (valEl) valEl.textContent = fmt ? fmt(S[key]) : (+S[key]).toFixed(2); };
+  show();
+  el.addEventListener('input', () => { S[key] = +el.value; show(); saveSettings(); });
+}
+
+bindSlider('avatarScale', 'avatarScale');
+bindSlider('pixelRes', 'pixelRes', (v) => `${v}px`);
+bindSlider('eyeSize', 'eyeSize');
+bindSlider('eyeSpacing', 'eyeSpacing');
+bindSlider('mouthSize', 'mouthSize');
+bindSlider('blinkSens', 'blinkSens');
+bindSlider('mouthSens', 'mouthSens');
+bindSlider('motion', 'motion');
+bindSlider('smoothing', 'smoothing');
+
+function bindCheck(id, key, onChange) {
+  const el = document.getElementById(id);
+  el.checked = S[key];
+  el.addEventListener('change', () => { S[key] = el.checked; saveSettings(); if (onChange) onChange(); });
+}
+bindCheck('showEyes', 'showEyes');
+bindCheck('showMouth', 'showMouth');
+bindCheck('stripWhite', 'stripWhite', applyAvatar);
+bindCheck('micChk', 'micOnRecord');
+bindCheck('mirrorChk', 'mirror', () => {
+  document.getElementById('previewWrap').classList.toggle('mirrored', S.mirror);
+});
+document.getElementById('previewWrap').classList.toggle('mirrored', S.mirror);
+
+/* backgrounds */
+const bgButtons = [...document.querySelectorAll('.bgBtn')];
+function refreshBgButtons() {
+  bgButtons.forEach((b) => b.classList.toggle('active', b.dataset.bg === S.bgType));
+  document.getElementById('greenBtn').classList.toggle('active', S.bgType === 'green');
+}
+let bgBeforeGreen = S.bgType === 'green' ? 'night' : S.bgType;
+bgButtons.forEach((b) => b.addEventListener('click', () => {
+  const t = b.dataset.bg;
+  if (t === 'image' && !bgImage) { document.getElementById('bgFile').click(); }
+  if (t !== 'green') bgBeforeGreen = t;
+  S.bgType = t;
+  refreshBgButtons();
+  saveSettings();
+}));
+document.getElementById('bgColor').value = S.bgColor;
+document.getElementById('bgColor').addEventListener('input', (e) => {
+  S.bgColor = e.target.value; S.bgType = 'color'; refreshBgButtons(); saveSettings();
+});
+document.getElementById('bgFile').addEventListener('change', (e) => {
+  if (e.target.files[0]) { loadBgFromFile(e.target.files[0]); S.bgType = 'image'; refreshBgButtons(); saveSettings(); }
+});
+
+function toggleGreen() {
+  if (S.bgType === 'green') S.bgType = bgBeforeGreen;
+  else { bgBeforeGreen = S.bgType; S.bgType = 'green'; }
+  refreshBgButtons();
+  saveSettings();
+}
+document.getElementById('greenBtn').addEventListener('click', toggleGreen);
+refreshBgButtons();
+
+/* avatar buttons */
+document.getElementById('loadAvatarBtn').addEventListener('click', () =>
+  document.getElementById('avatarFile').click());
+document.getElementById('avatarFile').addEventListener('change', (e) => {
+  if (e.target.files[0]) loadAvatarFromFile(e.target.files[0]);
+});
+document.getElementById('defaultAvatarBtn').addEventListener('click', () => {
+  setAvatarSource(makePixelCrab());
+  try { localStorage.removeItem('pixelpuppet-avatar'); } catch (e) {}
+});
+
+/* stage bar */
+recBtn.addEventListener('click', toggleRecording);
+document.getElementById('editBtn').addEventListener('click', () => setEditMode(!editMode));
+document.getElementById('camRetryBtn').addEventListener('click', initCamera);
+
+/* keyboard shortcuts */
+document.addEventListener('keydown', (e) => {
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+  if (e.code === 'KeyR') toggleRecording();
+  else if (e.code === 'KeyG') toggleGreen();
+  else if (e.code === 'KeyE') setEditMode(!editMode);
+});
+
+/* ---------------- boot ---------------- */
+
+setAvatarSource(makePixelCrab());
+const savedAvatar = (() => { try { return localStorage.getItem('pixelpuppet-avatar'); } catch (e) { return null; } })();
+if (savedAvatar) {
+  const img = new Image();
+  img.onload = () => setAvatarSource(img);
+  img.src = savedAvatar;
+} else {
+  tryAutoLoadCrab();
+}
+
+initTracking();
+initCamera();
+
+let lastLiveStatus = '';
+function updateLiveStatus() {
+  if (!landmarker || !camReady) return;
+  const txt = raw.face ? 'TRACKING' : 'NO FACE';
+  if (txt !== lastLiveStatus) {
+    lastLiveStatus = txt;
+    setStatus(txt, raw.face ? '#4ade80' : '#eab308');
+  }
+}
+
+function tick(now) {
+  requestAnimationFrame(tick);
+  processFrame(now);
+  updateSmoothing(now);
+  render(now);
+  drawPreview();
+  updateLiveStatus();
+}
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

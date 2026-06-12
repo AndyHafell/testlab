@@ -1,0 +1,857 @@
+--- a/app.py
++++ b/app.py
+@@ -360,6 +360,11 @@
+         pass
+     try:
+         conn.execute("ALTER TABLE videos ADD COLUMN visual_tags TEXT")
++    except sqlite3.OperationalError:
++        pass
++    try:
++        # Writing Mode: rich-text content doc (HTML) edited in the Docs-style editor
++        conn.execute("ALTER TABLE videos ADD COLUMN writing_doc TEXT")
+     except sqlite3.OperationalError:
+         pass
+ 
+@@ -11765,8 +11770,68 @@
+     conn.commit()
+     conn.close()
+     return jsonify({"ok": True})
++
++
++def writing_mode_required(f):
++    """Writing Mode is a private admin surface (same invisible-404 contract as
++    the Labs): the session's identity_email must be in ADMIN_EMAILS. Reuses
++    _testing_lab_admin so impersonated/legacy sessions resolve identically."""
++    @wraps(f)
++    def decorated(*args, **kwargs):
++        if not _testing_lab_admin():
++            return jsonify({"error": "not found"}), 404
++        return f(*args, **kwargs)
++    return decorated
+ 
+ 
++@app.route("/api/videos/<int:vid>/writing-doc", methods=["GET"])
++@writing_mode_required
++@video_owner_required
++def get_writing_doc(vid):
++    conn = get_db()
++    row = conn.execute("SELECT writing_doc FROM videos WHERE id=?", (vid,)).fetchone()
++    conn.close()
++    if not row:
++        return jsonify({"error": "video not found"}), 404
++    return jsonify({"writing_doc": row["writing_doc"] or ""})
++
++
++@app.route("/api/videos/<int:vid>/writing-doc", methods=["POST"])
++@writing_mode_required
++@video_owner_required
++def save_writing_doc(vid):
++    body = request.get_json(force=True, silent=True) or {}
++    html = body.get("writing_doc", "")
++    conn = get_db()
++    conn.execute("UPDATE videos SET writing_doc=? WHERE id=?", (html, vid))
++    conn.commit()
++    conn.close()
++    return jsonify({"ok": True})
++
++
++_WRITING_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
++
++
++@app.route("/api/videos/<int:vid>/writing-doc/image", methods=["POST"])
++@writing_mode_required
++@video_owner_required
++def upload_writing_image(vid):
++    """Image insert from the Writing Mode editor. Saves under
++    UPLOAD_DIR/writing/<vid>/ and returns the /static URL to embed."""
++    f = request.files.get("file")
++    if not f or not f.filename:
++        return jsonify({"error": "no file"}), 400
++    name = secure_filename(f.filename)
++    ext = os.path.splitext(name)[1].lower()
++    if ext not in _WRITING_IMAGE_EXTS:
++        return jsonify({"error": "unsupported file type"}), 400
++    out_dir = UPLOAD_DIR / "writing" / str(vid)
++    out_dir.mkdir(parents=True, exist_ok=True)
++    fname = f"{int(time.time())}_{uuid.uuid4().hex[:6]}_{name}"
++    f.save(out_dir / fname)
++    return jsonify({"url": f"/static/uploads/writing/{vid}/{fname}"})
++
++
+ @app.route("/api/videos/<int:vid>/vocal-doc/generate", methods=["POST"])
+ @video_owner_required
+ def generate_vocal_doc(vid):
+--- a/templates/index.html
++++ b/templates/index.html
+@@ -2753,6 +2753,227 @@
+         .notion-editor th, .notion-editor td { border:1px solid rgba(255,255,255,0.08); padding:8px 14px; text-align:left; }
+         .notion-editor th { background:rgba(255,255,255,0.04); color:#fff; font-weight:600; }
+         .notion-editor ::selection { background:rgba(91,155,213,0.3); }
++
++        /* ============ Writing Mode — Google Docs clone ============ */
++        #writingMode {
++            position:fixed; inset:0; z-index:3000; display:none;
++            flex-direction:column; background:#f9fbfd; color:#444746;
++            font-family:'Roboto', Arial, sans-serif;
++        }
++        #writingMode.open { display:flex; }
++        .wm-header { display:flex; align-items:flex-start; padding:8px 16px 0; gap:8px; flex-shrink:0; }
++        .wm-docs-icon { width:27px; height:35px; margin-top:2px; cursor:pointer; flex-shrink:0; }
++        .wm-head-main { display:flex; flex-direction:column; min-width:0; }
++        .wm-title-row { display:flex; align-items:center; gap:2px; height:26px; }
++        .wm-doc-title {
++            font-size:18px; color:#1f1f1f; padding:0 6px; border-radius:4px;
++            white-space:nowrap; max-width:38vw; overflow:hidden; text-overflow:ellipsis;
++            border:1px solid transparent; line-height:24px;
++        }
++        .wm-doc-title:hover { border-color:#747775; }
++        .wm-title-ico {
++            width:26px; height:26px; border-radius:50%; border:none; background:none;
++            display:flex; align-items:center; justify-content:center; cursor:pointer; color:#444746; padding:0;
++        }
++        .wm-title-ico:hover { background:rgba(60,64,67,.08); }
++        .wm-title-ico svg { width:17px; height:17px; fill:#444746; }
++        .wm-save-status {
++            display:flex; align-items:center; gap:5px; font-size:12.5px; color:#444746;
++            padding:2px 8px; border-radius:12px; margin-left:4px; cursor:default; white-space:nowrap;
++        }
++        .wm-save-status:hover { background:rgba(60,64,67,.08); }
++        .wm-save-status svg { width:17px; height:17px; fill:#444746; flex-shrink:0; }
++        .wm-save-status.error { color:#d93025; }
++        .wm-save-status.error svg { fill:#d93025; }
++        .wm-menubar { display:flex; margin-left:-1px; }
++        .wm-menu {
++            font-size:14px; color:#202124; padding:1px 7px; border-radius:4px;
++            line-height:21px; cursor:default; user-select:none;
++        }
++        .wm-menu:hover { background:rgba(60,64,67,.08); }
++        .wm-head-right { margin-left:auto; display:flex; align-items:center; gap:8px; padding-top:4px; }
++        .wm-round-btn {
++            width:40px; height:40px; border-radius:50%; border:none; background:none;
++            display:flex; align-items:center; justify-content:center; cursor:pointer; padding:0;
++        }
++        .wm-round-btn:hover { background:rgba(60,64,67,.08); }
++        .wm-round-btn svg { width:21px; height:21px; fill:#444746; }
++        .wm-share-btn {
++            display:flex; align-items:center; gap:8px; background:#c2e7ff; color:#001d35;
++            border:none; border-radius:999px; padding:0 16px; height:40px;
++            font-size:14px; font-weight:500; font-family:inherit; cursor:pointer;
++        }
++        .wm-share-btn:hover { box-shadow:0 1px 3px 1px rgba(60,64,67,.15); }
++        .wm-share-btn svg { width:18px; height:18px; fill:#001d35; }
++        .wm-avatar {
++            width:32px; height:32px; border-radius:50%; background:#0b57d0; color:#fff;
++            display:flex; align-items:center; justify-content:center;
++            font-size:15px; font-weight:500; margin:0 4px; user-select:none;
++        }
++        .wm-toolbar-wrap { padding:6px 16px 6px; flex-shrink:0; }
++        .wm-toolbar {
++            background:#edf2fa; border-radius:999px; height:40px;
++            display:flex; align-items:center; padding:0 10px; gap:1px; overflow:hidden;
++        }
++        .wm-tbtn {
++            min-width:28px; height:28px; border:none; background:none; border-radius:4px;
++            display:flex; align-items:center; justify-content:center; cursor:pointer;
++            color:#444746; padding:0 3px; font-family:inherit; flex-shrink:0;
++        }
++        .wm-tbtn:hover { background:#dde3ea; }
++        .wm-tbtn.active { background:#d3e3fd; }
++        .wm-tbtn svg { width:18px; height:18px; fill:#444746; }
++        .wm-tsep { width:1px; height:20px; background:#c7c7c7; margin:0 5px; flex-shrink:0; }
++        .wm-tselect {
++            border:none; background:transparent; color:#444746; font-size:13.5px;
++            font-family:inherit; height:28px; border-radius:4px; cursor:pointer; outline:none;
++            flex-shrink:0; max-width:118px;
++        }
++        .wm-tselect:hover { background:#dde3ea; }
++        .wm-size-box {
++            width:26px; height:24px; border:1px solid #747775; border-radius:4px;
++            font-size:13.5px; text-align:center; line-height:22px; color:#444746;
++            margin:0 2px; user-select:none; flex-shrink:0; background:#fff;
++        }
++        .wm-drop { position:relative; flex-shrink:0; }
++        .wm-palette {
++            position:absolute; top:32px; left:0; background:#fff; border-radius:8px;
++            box-shadow:0 2px 6px 2px rgba(60,64,67,.25); padding:10px; z-index:20;
++            display:none; grid-template-columns:repeat(10, 20px); gap:4px;
++        }
++        .wm-palette.open { display:grid; }
++        .wm-swatch { width:20px; height:20px; border-radius:50%; cursor:pointer; border:1px solid rgba(0,0,0,.12); }
++        .wm-swatch:hover { box-shadow:0 0 0 2px #fff, 0 0 0 3px #444746; }
++
++        .wm-ruler-zone { height:24px; flex-shrink:0; overflow:hidden; }
++        .wm-ruler { width:816px; height:24px; margin:0 auto; position:relative; background:#fff; }
++        .wm-ruler-shade { position:absolute; top:0; bottom:0; background:#f1f3f4; }
++        .wm-ruler-tick { position:absolute; bottom:4px; width:1px; height:4px; background:#9aa0a6; }
++        .wm-ruler-tick.half { height:7px; }
++        .wm-ruler-num {
++            position:absolute; bottom:3px; font-size:10px; color:#80868b;
++            transform:translateX(-50%); user-select:none;
++        }
++        .wm-ruler-tri {
++            position:absolute; bottom:-1px; width:0; height:0; transform:translateX(-50%);
++            border-left:5px solid transparent; border-right:5px solid transparent;
++            border-top:7px solid #4485f4;
++        }
++        .wm-ruler-rect { position:absolute; bottom:8px; width:10px; height:4px; background:#4485f4; transform:translateX(-50%); }
++
++        .wm-body { flex:1; display:flex; min-height:0; }
++        .wm-sidebar {
++            width:264px; flex-shrink:0; display:flex; flex-direction:column;
++            padding:4px 8px 12px 12px; min-height:0;
++        }
++        .wm-side-head {
++            display:flex; align-items:center; gap:8px; padding:6px 10px 10px;
++            font-size:13.5px; font-weight:500; color:#444746; flex-shrink:0;
++        }
++        .wm-side-head svg { width:18px; height:18px; fill:#444746; }
++        .wm-tabs { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:2px; min-height:0; }
++        .wm-tab {
++            display:flex; align-items:center; gap:10px; padding:0 12px; height:36px;
++            border-radius:999px; font-size:14px; color:#444746; cursor:pointer;
++            flex-shrink:0; user-select:none;
++        }
++        .wm-tab:hover { background:rgba(68,71,70,.08); }
++        .wm-tab.active { background:#d3e3fd; color:#041e49; font-weight:500; }
++        .wm-tab svg { width:16px; height:16px; fill:currentColor; flex-shrink:0; }
++        .wm-tab span { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
++        .wm-side-empty { padding:12px; font-size:13px; color:#80868b; }
++        .wm-exit-link {
++            margin-top:10px; flex-shrink:0; display:flex; align-items:center; gap:8px;
++            font-size:13px; color:#0b57d0; cursor:pointer; padding:8px 12px; border-radius:999px;
++        }
++        .wm-exit-link:hover { background:rgba(11,87,208,.08); }
++
++        .wm-canvas { flex:1; overflow:auto; background:#f8f9fa; min-width:0; }
++        .wm-page-wrap { padding:14px 40px 0; }
++        .wm-page {
++            width:816px; min-height:1056px; margin:0 auto 90px; background:#fff;
++            border:1px solid #c7c7c7; border-radius:1px; padding:96px;
++            box-shadow:0 1px 3px 1px rgba(60,64,67,.06);
++        }
++        .wm-editor {
++            min-height:864px; outline:none; cursor:text;
++            font-family:Arial, sans-serif; font-size:11pt; line-height:1.5; color:#000;
++            word-wrap:break-word; overflow-wrap:break-word;
++        }
++        .wm-editor > :first-child { margin-top:0; }
++        .wm-editor p, .wm-editor div { margin:0; }
++        .wm-editor h1 { font-size:20pt; font-weight:400; color:#000; margin:20px 0 6px; line-height:1.25; }
++        .wm-editor h2 { font-size:16pt; font-weight:400; color:#000; margin:18px 0 6px; line-height:1.25; }
++        .wm-editor h3 { font-size:14pt; font-weight:400; color:#434343; margin:16px 0 4px; line-height:1.25; }
++        .wm-editor ul, .wm-editor ol { margin:0; padding-left:48px; }
++        .wm-editor img { max-width:100%; height:auto; }
++        .wm-editor a { color:#0b57d0; }
++        .wm-editor ::selection { background:#c6dafc; }
++
++        /* ---- Writing Mode dark theme (Google Docs dark) ---- */
++        #writingMode.dark { background:#1f1f1f; color:#c7c7c7; color-scheme:dark; }
++        #writingMode.dark .wm-doc-title { color:#e3e3e3; }
++        #writingMode.dark .wm-doc-title:hover { border-color:#5f6368; }
++        #writingMode.dark .wm-menu { color:#e3e3e3; }
++        #writingMode.dark .wm-menu:hover,
++        #writingMode.dark .wm-title-ico:hover,
++        #writingMode.dark .wm-round-btn:hover,
++        #writingMode.dark .wm-save-status:hover { background:rgba(255,255,255,.08); }
++        #writingMode.dark .wm-title-ico svg,
++        #writingMode.dark .wm-round-btn svg,
++        #writingMode.dark .wm-save-status svg,
++        #writingMode.dark .wm-tbtn svg { fill:#c7c7c7; }
++        #writingMode.dark .wm-title-ico svg path[stroke] { stroke:#c7c7c7; }
++        #writingMode.dark .wm-save-status { color:#c7c7c7; }
++        #writingMode.dark .wm-save-status.error { color:#f2b8b5; }
++        #writingMode.dark .wm-save-status.error svg { fill:#f2b8b5; }
++        #writingMode.dark .wm-share-btn { background:#a8c7fa; color:#062e6f; }
++        #writingMode.dark .wm-share-btn svg { fill:#062e6f; }
++        #writingMode.dark .wm-toolbar { background:#2d2d2d; }
++        #writingMode.dark .wm-tbtn { color:#c7c7c7; }
++        #writingMode.dark .wm-tbtn:hover { background:#3c3f43; }
++        #writingMode.dark .wm-tbtn.active { background:#004a77; }
++        #writingMode.dark .wm-tsep { background:#5f6368; }
++        #writingMode.dark .wm-tselect { color:#c7c7c7; }
++        #writingMode.dark .wm-tselect:hover { background:#3c3f43; }
++        #writingMode.dark .wm-size-box { background:transparent; border-color:#8e918f; color:#c7c7c7; }
++        #writingMode.dark .wm-palette { background:#2d2d2d; }
++        #writingMode.dark .wm-swatch { border-color:rgba(255,255,255,.15); }
++        #writingMode.dark .wm-swatch:hover { box-shadow:0 0 0 2px #2d2d2d, 0 0 0 3px #c7c7c7; }
++        #writingMode.dark .wm-ruler { background:#1f1f1f; }
++        #writingMode.dark .wm-ruler-shade { background:#2a2b2d; }
++        #writingMode.dark .wm-ruler-tick { background:#80868b; }
++        #writingMode.dark .wm-ruler-num { color:#9aa0a6; }
++        #writingMode.dark .wm-ruler-tri { border-top-color:#a8c7fa; }
++        #writingMode.dark .wm-ruler-rect { background:#a8c7fa; }
++        #writingMode.dark .wm-side-head { color:#c7c7c7; }
++        #writingMode.dark .wm-side-head svg { fill:#c7c7c7; }
++        #writingMode.dark .wm-tab { color:#c7c7c7; }
++        #writingMode.dark .wm-tab:hover { background:rgba(255,255,255,.08); }
++        #writingMode.dark .wm-tab.active { background:#004a77; color:#c2e7ff; }
++        #writingMode.dark .wm-side-empty { color:#9aa0a6; }
++        #writingMode.dark .wm-exit-link { color:#a8c7fa; }
++        #writingMode.dark .wm-exit-link:hover { background:rgba(168,199,250,.10); }
++        #writingMode.dark .wm-exit-link svg { fill:#a8c7fa; }
++        #writingMode.dark .wm-canvas { background:#141414; }
++        #writingMode.dark .wm-page { background:#1f1f1f; border-color:#3c4043; box-shadow:none; }
++        #writingMode.dark .wm-editor { color:#e3e3e3; }
++        #writingMode.dark .wm-editor h1, #writingMode.dark .wm-editor h2 { color:#e3e3e3; }
++        #writingMode.dark .wm-editor h3 { color:#c7c7c7; }
++        #writingMode.dark .wm-editor a { color:#a8c7fa; }
++        #writingMode.dark .wm-editor ::selection { background:rgba(168,199,250,.35); }
++
++        @media print {
++            body.wm-printing > *:not(#writingMode) { display:none !important; }
++            body.wm-printing #writingMode { position:static; display:block; background:#fff; }
++            body.wm-printing #writingMode .wm-header,
++            body.wm-printing #writingMode .wm-toolbar-wrap,
++            body.wm-printing #writingMode .wm-ruler-zone,
++            body.wm-printing #writingMode .wm-sidebar { display:none !important; }
++            body.wm-printing .wm-canvas { overflow:visible; background:#fff; }
++            body.wm-printing .wm-page-wrap { padding:0; zoom:1 !important; }
++            body.wm-printing .wm-page { border:none; box-shadow:none; width:auto; min-height:0; margin:0; }
++        }
+     </style>
+     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+@@ -3242,6 +3463,7 @@
+                     <button class="profile-menu-item" onclick="openSettings()">Settings</button>
+                     <button class="profile-menu-item" id="factoryMenuItem" onclick="openFactory()" style="display:none;color:#f5b942;">🏭 Factory</button>
+                     <button class="profile-menu-item" id="testingLabMenuItem" onclick="openTestingLab()" style="display:none;color:#7fd4a8;">🧪 Testing Lab</button>
++                    <button class="profile-menu-item" id="writingMenuItem" onclick="openWritingMode()" style="display:none;color:#8ab4f8;">✍️ Writing</button>
+                     <button class="profile-menu-item" onclick="signOut()">Sign out</button>
+                 </div>
+             </div>
+@@ -3304,6 +3526,138 @@
+         <div class="creator-list" id="creatorList"></div>
+     </div>
+     <div class="grid" id="videoGrid"></div>
++
++    <!-- Writing Mode: full-screen Google Docs clone. Each video = one doc tab.
++         Content autosaves into videos.writing_doc on every keystroke. -->
++    <div id="writingMode">
++        <div class="wm-header">
++            <svg class="wm-docs-icon" viewBox="0 0 28 36" onclick="exitWritingMode()" title="Back to dashboard">
++                <path d="M18 0H3C1.35 0 0 1.35 0 3v30c0 1.65 1.35 3 3 3h22c1.65 0 3-1.35 3-3V10L18 0z" fill="#3086F6"/>
++                <path d="M18 0l10 10h-10V0z" fill="#0C67D6"/>
++                <path d="M7 18h14v2H7v-2zm0 4h14v2H7v-2zm0 4h14v2H7v-2zm0-12h8v2H7v-2z" fill="#FDFFFF"/>
++            </svg>
++            <div class="wm-head-main">
++                <div class="wm-title-row">
++                    <span class="wm-doc-title" id="wmDocTitle">Untitled document</span>
++                    <button class="wm-title-ico" title="Star">
++                        <svg viewBox="0 0 24 24"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" fill="none" stroke="#444746" stroke-width="1.6"/></svg>
++                    </button>
++                    <button class="wm-title-ico" title="Move">
++                        <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
++                    </button>
++                    <span class="wm-save-status" id="wmSaveStatus" title="Every change is saved to your dashboard automatically">
++                        <svg viewBox="0 0 24 24"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM10 17l-3.5-3.5 1.41-1.41L10 14.17l4.59-4.58L16 11l-6 6z"/></svg>
++                        <span id="wmSaveText"></span>
++                    </span>
++                </div>
++                <div class="wm-menubar">
++                    <span class="wm-menu">File</span><span class="wm-menu">Edit</span><span class="wm-menu">View</span><span class="wm-menu">Insert</span><span class="wm-menu">Format</span><span class="wm-menu">Tools</span><span class="wm-menu">Extensions</span><span class="wm-menu">Help</span>
++                </div>
++            </div>
++            <div class="wm-head-right">
++                <button class="wm-round-btn" id="wmDarkBtn" onclick="wmToggleDark()" title="Toggle dark mode">
++                    <svg viewBox="0 0 24 24" id="wmDarkIcon"><path d=""/></svg>
++                </button>
++                <button class="wm-round-btn" title="Version history">
++                    <svg viewBox="0 0 24 24"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6a7 7 0 1 1 7 7 6.97 6.97 0 0 1-4.94-2.06l-1.42 1.42A8.96 8.96 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
++                </button>
++                <button class="wm-round-btn" title="Show all comments">
++                    <svg viewBox="0 0 24 24"><path d="M21.99 4c0-1.1-.89-2-1.99-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4-.01-18z"/></svg>
++                </button>
++                <button class="wm-share-btn" onclick="showToast('This doc lives in your dashboard — it\'s already yours.')">
++                    <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zM9 6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9V6z"/></svg>
++                    Share
++                </button>
++                <div class="wm-avatar" id="wmAvatar">A</div>
++            </div>
++        </div>
++        <div class="wm-toolbar-wrap">
++            <div class="wm-toolbar" id="wmToolbar">
++                <button class="wm-tbtn" onclick="wmExec('undo')" title="Undo (⌘Z)"><svg viewBox="0 0 24 24"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg></button>
++                <button class="wm-tbtn" onclick="wmExec('redo')" title="Redo (⌘Y)"><svg viewBox="0 0 24 24"><path d="M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73.72 5.12 1.88L13 16h9V7l-3.6 3.6z"/></svg></button>
++                <button class="wm-tbtn" onclick="wmPrint()" title="Print (⌘P)"><svg viewBox="0 0 24 24"><path d="M19 8H5c-1.66 0-3 1.34-3 3v6h4v4h12v-4h4v-6c0-1.66-1.34-3-3-3zm-3 11H8v-5h8v5zm3-7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-1-9H6v4h12V3z"/></svg></button>
++                <button class="wm-tbtn" title="Spelling and grammar check"><svg viewBox="0 0 24 24"><path d="M12.45 16h2.09L9.43 3H7.57L2.46 16h2.09l1.12-3h5.64l1.14 3zm-6.02-5L8.5 5.48 10.57 11H6.43zm15.16.59l-8.09 8.09L9.83 16l-1.41 1.41 5.09 5.09L23 13l-1.41-1.41z"/></svg></button>
++                <button class="wm-tbtn" title="Paint format"><svg viewBox="0 0 24 24"><path d="M18 4V3c0-.55-.45-1-1-1H5c-.55 0-1 .45-1 1v4c0 .55.45 1 1 1h12c.55 0 1-.45 1-1V6h1v4H9v11c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-9h8V4h-3z"/></svg></button>
++                <div class="wm-tsep"></div>
++                <select class="wm-tselect" id="wmZoom" onchange="wmSetZoom(this.value)" title="Zoom">
++                    <option value="0.5">50%</option><option value="0.75">75%</option><option value="0.9">90%</option>
++                    <option value="1" selected>100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option>
++                </select>
++                <div class="wm-tsep"></div>
++                <select class="wm-tselect" id="wmStyle" onchange="wmBlock(this.value)" title="Styles" style="width:104px;">
++                    <option value="p" selected>Normal text</option>
++                    <option value="h1">Heading 1</option>
++                    <option value="h2">Heading 2</option>
++                    <option value="h3">Heading 3</option>
++                </select>
++                <div class="wm-tsep"></div>
++                <select class="wm-tselect" id="wmFont" onchange="wmExec('fontName', this.value)" title="Font" style="width:74px;">
++                    <option value="Arial" selected>Arial</option>
++                    <option value="Georgia">Georgia</option>
++                    <option value="'Times New Roman'">Times New Roman</option>
++                    <option value="'Courier New'">Courier New</option>
++                    <option value="Verdana">Verdana</option>
++                    <option value="'Trebuchet MS'">Trebuchet MS</option>
++                    <option value="Impact">Impact</option>
++                </select>
++                <div class="wm-tsep"></div>
++                <button class="wm-tbtn" onclick="wmSizeStep(-1)" title="Decrease font size"><svg viewBox="0 0 24 24"><path d="M19 13H5v-2h14v2z"/></svg></button>
++                <span class="wm-size-box" id="wmSizeBox">11</span>
++                <button class="wm-tbtn" onclick="wmSizeStep(1)" title="Increase font size"><svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg></button>
++                <div class="wm-tsep"></div>
++                <button class="wm-tbtn" id="wmBoldBtn" onclick="wmExec('bold')" title="Bold (⌘B)"><svg viewBox="0 0 24 24"><path d="M15.6 10.79c.97-.67 1.65-1.77 1.65-2.79 0-2.26-1.75-4-4-4H7v14h7.04c2.09 0 3.71-1.7 3.71-3.79 0-1.52-.86-2.82-2.15-3.42zM10 6.5h3c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5h-3v-3zm3.5 9H10v-3h3.5c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5z"/></svg></button>
++                <button class="wm-tbtn" id="wmItalicBtn" onclick="wmExec('italic')" title="Italic (⌘I)"><svg viewBox="0 0 24 24"><path d="M10 4v3h2.21l-3.42 8H6v3h8v-3h-2.21l3.42-8H18V4z"/></svg></button>
++                <button class="wm-tbtn" id="wmUnderBtn" onclick="wmExec('underline')" title="Underline (⌘U)"><svg viewBox="0 0 24 24"><path d="M12 17c3.31 0 6-2.69 6-6V3h-2.5v8c0 1.93-1.57 3.5-3.5 3.5S8.5 12.93 8.5 11V3H6v8c0 3.31 2.69 6 6 6zm-7 2v2h14v-2H5z"/></svg></button>
++                <div class="wm-drop">
++                    <button class="wm-tbtn" onclick="wmTogglePalette('wmColorPal')" title="Text color"><svg viewBox="0 0 24 24"><path d="M11 3L5.5 17h2.25l1.12-3h6.25l1.12 3h2.25L13 3h-2zm-1.38 9L12 5.67 14.38 12H9.62z"/><rect x="4" y="19" width="16" height="3.2" rx="0.5" fill="#000"/></svg></button>
++                    <div class="wm-palette" id="wmColorPal"></div>
++                </div>
++                <div class="wm-drop">
++                    <button class="wm-tbtn" onclick="wmTogglePalette('wmHilitePal')" title="Highlight color"><svg viewBox="0 0 24 24"><path d="M6 14l3 3v5h6v-5l3-3V9H6v5zm5-12h2v3h-2V2zM3.5 5.88l1.41-1.41 2.12 2.12L5.62 8 3.5 5.88zm13.46.71l2.12-2.12 1.41 1.41L18.38 8l-1.42-1.41z" transform="scale(0.85) translate(2 0)"/><rect x="4" y="19" width="16" height="3.2" rx="0.5" fill="#ffff00"/></svg></button>
++                    <div class="wm-palette" id="wmHilitePal"></div>
++                </div>
++                <div class="wm-tsep"></div>
++                <button class="wm-tbtn" onclick="wmInsertLink()" title="Insert link (⌘K)"><svg viewBox="0 0 24 24"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg></button>
++                <button class="wm-tbtn" title="Add comment"><svg viewBox="0 0 24 24"><path d="M21.99 4c0-1.1-.89-2-1.99-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4-.01-18zM17 11h-4v4h-2v-4H7V9h4V5h2v4h4v2z"/></svg></button>
++                <button class="wm-tbtn" onclick="wmPickImage()" title="Insert image"><svg viewBox="0 0 24 24"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg></button>
++                <div class="wm-tsep"></div>
++                <button class="wm-tbtn" id="wmAlignL" onclick="wmExec('justifyLeft')" title="Align left"><svg viewBox="0 0 24 24"><path d="M15 15H3v2h12v-2zm0-8H3v2h12V7zM3 13h18v-2H3v2zm0 8h18v-2H3v2zM3 3v2h18V3H3z"/></svg></button>
++                <button class="wm-tbtn" id="wmAlignC" onclick="wmExec('justifyCenter')" title="Align center"><svg viewBox="0 0 24 24"><path d="M7 15v2h10v-2H7zm-4 6h18v-2H3v2zm0-8h18v-2H3v2zm4-6v2h10V7H7zM3 3v2h18V3H3z"/></svg></button>
++                <button class="wm-tbtn" id="wmAlignR" onclick="wmExec('justifyRight')" title="Align right"><svg viewBox="0 0 24 24"><path d="M3 21h18v-2H3v2zm6-4h12v-2H9v2zm-6-4h18v-2H3v2zm6-4h12V7H9v2zM3 3v2h18V3H3z"/></svg></button>
++                <div class="wm-tsep"></div>
++                <button class="wm-tbtn" onclick="wmExec('insertUnorderedList')" title="Bulleted list (⌘+Shift+8)"><svg viewBox="0 0 24 24"><path d="M4 10.5c-.83 0-1.5.67-1.5 1.5s.67 1.5 1.5 1.5 1.5-.67 1.5-1.5-.67-1.5-1.5-1.5zm0-6c-.83 0-1.5.67-1.5 1.5S3.17 7.5 4 7.5 5.5 6.83 5.5 6 4.83 4.5 4 4.5zm0 12c-.83 0-1.5.68-1.5 1.5s.68 1.5 1.5 1.5 1.5-.68 1.5-1.5-.67-1.5-1.5-1.5zM7 19h14v-2H7v2zm0-6h14v-2H7v2zm0-8v2h14V5H7z"/></svg></button>
++                <button class="wm-tbtn" onclick="wmExec('insertOrderedList')" title="Numbered list (⌘+Shift+7)"><svg viewBox="0 0 24 24"><path d="M2 17h2v.5H3v1h1v.5H2v1h3v-4H2v1zm1-9h1V4H2v1h1v3zm-1 3h1.8L2 13.1v.9h3v-1H3.2L5 10.9V10H2v1zm5-6v2h14V5H7zm0 14h14v-2H7v2zm0-6h14v-2H7v2z"/></svg></button>
++                <button class="wm-tbtn" onclick="wmExec('outdent')" title="Decrease indent"><svg viewBox="0 0 24 24"><path d="M11 17h10v-2H11v2zm-8-5l4 4V8l-4 4zm0 9h18v-2H3v2zM3 3v2h18V3H3zm8 6h10V7H11v2zm0 4h10v-2H11v2z"/></svg></button>
++                <button class="wm-tbtn" onclick="wmExec('indent')" title="Increase indent"><svg viewBox="0 0 24 24"><path d="M3 21h18v-2H3v2zM3 8v8l4-4-4-4zm8 9h10v-2H11v2zM3 3v2h18V3H3zm8 6h10V7H11v2zm0 4h10v-2H11v2z"/></svg></button>
++                <div class="wm-tsep"></div>
++                <button class="wm-tbtn" onclick="wmClearFormat()" title="Clear formatting (⌘\)"><svg viewBox="0 0 24 24"><path d="M3.27 5L2 6.27l6.97 6.97L6.5 19h3l1.57-3.66L16.73 21 18 19.73 3.55 5.27 3.27 5zM6 5v.18L8.82 8h2.4l-.72 1.68 2.1 2.1L14.21 8H20V5H6z"/></svg></button>
++            </div>
++        </div>
++        <div class="wm-body">
++            <div class="wm-sidebar">
++                <div class="wm-side-head">
++                    <svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
++                    Video tabs
++                </div>
++                <div class="wm-tabs" id="wmTabs"></div>
++                <div class="wm-exit-link" onclick="exitWritingMode()">
++                    <svg viewBox="0 0 24 24" width="16" height="16" fill="#0b57d0"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
++                    Back to board
++                </div>
++            </div>
++            <div class="wm-main" style="flex:1; display:flex; flex-direction:column; min-width:0;">
++                <div class="wm-ruler-zone"><div class="wm-ruler" id="wmRuler"></div></div>
++                <div class="wm-canvas" id="wmCanvas">
++                    <div class="wm-page-wrap" id="wmPageWrap">
++                        <div class="wm-page">
++                            <div class="wm-editor" id="wmEditor" contenteditable="true" spellcheck="true"></div>
++                        </div>
++                    </div>
++                </div>
++            </div>
++        </div>
++        <input type="file" id="wmImageInput" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none;" onchange="wmUploadImage(this)">
++    </div>
+ 
+     <!-- Publishing page (Studio clone). Beat 1: shell + left-rail Ready Queue.
+          Center workspace + right rail are filled in later beats. -->
+@@ -4360,6 +4714,7 @@
+         (async () => {
+             if (!CG_AUTHENTICATED) return;  // welcome/join/activate: no authed fetches
+             await loadVideos();
++            if (typeof restoreWritingMode === 'function') restoreWritingMode();
+             await loadChannels();
+             autoScrapeIfNeeded();
+             // Backfill dates: RSS first, then deep (yt-dlp individual lookups) for remaining
+@@ -8579,6 +8934,10 @@
+                 // matches the server gate exactly.
+                 const lab = document.getElementById('testingLabMenuItem');
+                 if (lab) lab.style.display = data.can_use_testing_lab ? '' : 'none';
++                // Writing Mode shares the Lab's identity_email gate — the menu
++                // item appears exactly for the sessions the server will allow.
++                const wri = document.getElementById('writingMenuItem');
++                if (wri) wri.style.display = data.can_use_testing_lab ? '' : 'none';
+                 // Feedback Lab soft-launch: server says who sees the tab
+                 // (admins now; everyone once FEEDBACK_LAB_OPEN=1).
+                 const fbt = document.getElementById('feedbackTabBtn');
+@@ -14405,5 +14764,377 @@
+         }, 150);
+     });
+     </script>
++    <script>
++    /* ============ Writing Mode — Google Docs clone ============ */
++    let wmActive = false;
++    let wmVid = null;            // videos.id currently open in the editor
++    let wmDirty = false;         // unsaved keystrokes pending
++    let wmSaveTimer = null;
++    let wmLoadSeq = 0;           // ignore stale doc fetches after fast tab clicks
++    let wmLastRange = null;      // selection inside editor, survives toolbar focus steals
++    let wmRulerBuilt = false;
++    const WM_SIZES = [8, 9, 10, 11, 12, 14, 18, 24, 30, 36];
++    let wmCurSize = 11;
++    /* Google Docs default palette (3 rows shown) */
++    const WM_COLORS = [
++        '#000000','#434343','#666666','#999999','#b7b7b7','#cccccc','#d9d9d9','#efefef','#f3f3f3','#ffffff',
++        '#980000','#ff0000','#ff9900','#ffff00','#00ff00','#00ffff','#4a86e8','#0000ff','#9900ff','#ff00ff',
++        '#e6b8af','#f4cccc','#fce5cd','#fff2cc','#d9ead3','#d0e0e3','#c9daf8','#cfe2f3','#d9d2e9','#ead1dc'
++    ];
++
++    function wmEl(id) { return document.getElementById(id); }
++
++    /* Profile-menu entry point (admin-only, next to Factory / Testing Lab). */
++    function openWritingMode() {
++        document.getElementById('profileMenu').classList.remove('open');
++        enterWritingMode();
++    }
++
++    /* Dark mode — Google Docs dark palette. Defaults ON to match the dashboard. */
++    const WM_ICON_SUN = 'M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1zM5.99 4.58a.996.996 0 0 0-1.41 0 .996.996 0 0 0 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41L5.99 4.58zm12.37 12.37a.996.996 0 0 0-1.41 0 .996.996 0 0 0 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0a.996.996 0 0 0 0-1.41l-1.06-1.06zm1.06-10.96a.996.996 0 0 0 0-1.41.996.996 0 0 0-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06zM7.05 18.36a.996.996 0 0 0 0-1.41.996.996 0 0 0-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06z';
++    const WM_ICON_MOON = 'M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.389 5.389 0 0 1-4.4 2.26 5.403 5.403 0 0 1-3.14-9.8c-.44-.06-.9-.1-1.36-.1z';
++
++    function wmApplyDark() {
++        const dark = localStorage.getItem('cg_writing_dark') !== '0';
++        wmEl('writingMode').classList.toggle('dark', dark);
++        wmEl('wmDarkIcon').firstElementChild.setAttribute('d', dark ? WM_ICON_SUN : WM_ICON_MOON);
++        wmEl('wmDarkBtn').title = dark ? 'Switch to light mode' : 'Switch to dark mode';
++    }
++
++    function wmToggleDark() {
++        const dark = localStorage.getItem('cg_writing_dark') !== '0';
++        localStorage.setItem('cg_writing_dark', dark ? '0' : '1');
++        wmApplyDark();
++    }
++
++    function enterWritingMode(vid) {
++        wmActive = true;
++        wmEl('writingMode').classList.add('open');
++        wmApplyDark();
++        document.body.style.overflow = 'hidden';
++        localStorage.setItem('cg_writing', '1');
++        document.execCommand('styleWithCSS', false, true);
++        document.execCommand('defaultParagraphSeparator', false, 'p');
++        if (!wmRulerBuilt) { wmBuildRuler(); wmBuildPalettes(); wmRulerBuilt = true; }
++        const email = (document.getElementById('profileMenuEmail') || {}).textContent || '';
++        wmEl('wmAvatar').textContent = (email.trim()[0] || 'A').toUpperCase();
++        wmRenderTabs();
++        const tabs = wmTabVideos();
++        if (!tabs.length) {
++            wmVid = null;
++            wmEl('wmDocTitle').textContent = 'Untitled document';
++            wmEl('wmEditor').innerHTML = '';
++            wmEl('wmEditor').contentEditable = 'false';
++            return;
++        }
++        wmEl('wmEditor').contentEditable = 'true';
++        const saved = parseInt(localStorage.getItem('cg_writing_vid'), 10);
++        const target = vid || (tabs.some(v => v.id === saved) ? saved : tabs[0].id);
++        wmSelectVideo(target);
++    }
++
++    function exitWritingMode() {
++        wmFlush();
++        wmActive = false;
++        wmEl('writingMode').classList.remove('open');
++        document.body.style.overflow = '';
++        localStorage.removeItem('cg_writing');
++    }
++
++    /* Re-open writing mode on page load if it was open when the user left. */
++    function restoreWritingMode() {
++        if (localStorage.getItem('cg_writing') === '1') enterWritingMode();
++    }
++
++    function wmTabVideos() {
++        return (videos || []).filter(v => !v.tucked);
++    }
++
++    const WM_TAB_ICON = '<svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm-1 7V3.5L18.5 9H13z"/></svg>';
++
++    function wmRenderTabs() {
++        const box = wmEl('wmTabs');
++        const tabs = wmTabVideos();
++        if (!tabs.length) {
++            box.innerHTML = '<div class="wm-side-empty">No videos yet — add one from the board and it shows up here as a doc.</div>';
++            return;
++        }
++        box.innerHTML = tabs.map(v =>
++            `<div class="wm-tab${v.id === wmVid ? ' active' : ''}" data-vid="${v.id}" onclick="wmSelectVideo(${v.id})" title="${esc(v.title || '')}">` +
++            WM_TAB_ICON + `<span>${esc(v.title || 'Untitled')}</span></div>`
++        ).join('');
++    }
++
++    async function wmSelectVideo(id) {
++        wmFlush();                       // never lose keystrokes from the previous doc
++        wmVid = id;
++        localStorage.setItem('cg_writing_vid', String(id));
++        document.querySelectorAll('#wmTabs .wm-tab').forEach(t =>
++            t.classList.toggle('active', +t.dataset.vid === id));
++        const v = (videos || []).find(x => x.id === id);
++        wmEl('wmDocTitle').textContent = (v && v.title) || 'Untitled document';
++        wmStatus('idle');
++        const seq = ++wmLoadSeq;
++        try {
++            const r = await fetch(`/api/videos/${id}/writing-doc`);
++            if (!r.ok) throw new Error('load failed');
++            const data = await r.json();
++            if (seq !== wmLoadSeq) return;            // user already clicked another tab
++            wmEl('wmEditor').innerHTML = data.writing_doc || '';
++            wmEl('wmEditor').focus();
++        } catch (e) {
++            if (seq === wmLoadSeq) showToast('Failed to load doc', true);
++        }
++    }
++
++    /* ---- autosave: every keystroke schedules a save; flushes never drop content ---- */
++
++    function wmEditorChanged() {
++        if (!wmVid) return;
++        wmDirty = true;
++        wmStatus('saving');
++        clearTimeout(wmSaveTimer);
++        wmSaveTimer = setTimeout(wmSaveNow, 400);
++    }
++
++    async function wmSaveNow() {
++        wmSaveTimer = null;
++        if (!wmVid) return;
++        const vid = wmVid;
++        const html = wmEl('wmEditor').innerHTML;
++        wmDirty = false;
++        try {
++            const r = await fetch(`/api/videos/${vid}/writing-doc`, {
++                method: 'POST',
++                headers: { 'Content-Type': 'application/json' },
++                body: JSON.stringify({ writing_doc: html })
++            });
++            if (!r.ok) throw new Error('save failed');
++            if (!wmDirty) wmStatus('saved');
++        } catch (e) {
++            wmDirty = true;
++            wmStatus('error');
++            setTimeout(() => { if (wmDirty && wmVid === vid) wmSaveNow(); }, 3000);
++        }
++    }
++
++    /* Synchronous-ish flush for tab switches / exit / page close. */
++    function wmFlush(useBeacon) {
++        if (wmSaveTimer) { clearTimeout(wmSaveTimer); wmSaveTimer = null; }
++        if (!wmDirty || !wmVid) return;
++        const url = `/api/videos/${wmVid}/writing-doc`;
++        const payload = JSON.stringify({ writing_doc: wmEl('wmEditor').innerHTML });
++        wmDirty = false;
++        if (useBeacon && navigator.sendBeacon) {
++            navigator.sendBeacon(url, new Blob([payload], { type: 'application/json' }));
++        } else {
++            fetch(url, {
++                method: 'POST', headers: { 'Content-Type': 'application/json' },
++                body: payload, keepalive: true
++            }).then(() => wmStatus('saved')).catch(() => {});
++        }
++    }
++
++    function wmStatus(state) {
++        const el = wmEl('wmSaveStatus'), txt = wmEl('wmSaveText');
++        el.classList.toggle('error', state === 'error');
++        if (state === 'saving') txt.textContent = 'Saving…';
++        else if (state === 'saved') txt.textContent = 'All changes saved';
++        else if (state === 'error') txt.textContent = 'Couldn’t save — retrying…';
++        else txt.textContent = '';
++    }
++
++    /* ---- toolbar ---- */
++
++    function wmRestoreSel() {
++        const sel = window.getSelection();
++        const ed = wmEl('wmEditor');
++        if (wmLastRange && (!sel.rangeCount || !ed.contains(sel.anchorNode))) {
++            sel.removeAllRanges();
++            sel.addRange(wmLastRange);
++        }
++    }
++
++    function wmExec(cmd, val) {
++        wmEl('wmEditor').focus();
++        wmRestoreSel();
++        document.execCommand(cmd, false, val || null);
++        wmEditorChanged();
++        wmSyncToolbar();
++    }
++
++    function wmBlock(tag) {
++        wmExec('formatBlock', '<' + tag + '>');
++    }
++
++    function wmClearFormat() {
++        wmExec('removeFormat');
++        wmExec('formatBlock', '<p>');
++    }
++
++    function wmSizeStep(dir) {
++        let i = WM_SIZES.indexOf(wmCurSize);
++        if (i === -1) i = WM_SIZES.findIndex(s => s >= wmCurSize);
++        i = Math.max(0, Math.min(WM_SIZES.length - 1, i + dir));
++        wmCurSize = WM_SIZES[i];
++        wmEl('wmSizeBox').textContent = wmCurSize;
++        /* execCommand has no pt sizes — apply size 7 then rewrite to the real pt */
++        wmEl('wmEditor').focus();
++        wmRestoreSel();
++        document.execCommand('fontSize', false, '7');
++        wmEl('wmEditor').querySelectorAll('font[size="7"]').forEach(f => {
++            f.removeAttribute('size');
++            f.style.fontSize = wmCurSize + 'pt';
++        });
++        wmEditorChanged();
++    }
++
++    function wmInsertLink() {
++        let url = prompt('Paste a link:');
++        if (!url) return;
++        if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
++        wmExec('createLink', url);
++    }
++
++    function wmPickImage() {
++        if (!wmVid) return;
++        const sel = window.getSelection();
++        if (sel.rangeCount && wmEl('wmEditor').contains(sel.anchorNode)) {
++            wmLastRange = sel.getRangeAt(0).cloneRange();
++        }
++        wmEl('wmImageInput').click();
++    }
++
++    async function wmUploadImage(input) {
++        const file = input.files && input.files[0];
++        input.value = '';
++        if (!file || !wmVid) return;
++        const fd = new FormData();
++        fd.append('file', file);
++        try {
++            const r = await fetch(`/api/videos/${wmVid}/writing-doc/image`, { method: 'POST', body: fd });
++            const data = await r.json();
++            if (!r.ok) throw new Error(data.error || 'upload failed');
++            wmExec('insertImage', data.url);
++        } catch (e) {
++            showToast('Image upload failed', true);
++        }
++    }
++
++    function wmSetZoom(z) {
++        z = parseFloat(z) || 1;
++        wmEl('wmPageWrap').style.zoom = z;
++        wmEl('wmRuler').style.zoom = z;
++        wmEl('wmRuler').parentElement.style.height = (24 * z) + 'px';
++    }
++
++    function wmPrint() {
++        document.body.classList.add('wm-printing');
++        window.print();
++        setTimeout(() => document.body.classList.remove('wm-printing'), 500);
++    }
++
++    function wmTogglePalette(id) {
++        const pal = wmEl(id);
++        const wasOpen = pal.classList.contains('open');
++        document.querySelectorAll('.wm-palette').forEach(p => p.classList.remove('open'));
++        if (!wasOpen) pal.classList.add('open');
++    }
++
++    function wmBuildPalettes() {
++        const mk = (id, cmd) => {
++            wmEl(id).innerHTML = WM_COLORS.map(c =>
++                `<div class="wm-swatch" style="background:${c}" title="${c}" ` +
++                `onclick="wmExec('${cmd}','${c}');wmTogglePalette('${id}')"></div>`
++            ).join('');
++        };
++        mk('wmColorPal', 'foreColor');
++        mk('wmHilitePal', 'hiliteColor');
++    }
++
++    /* Ruler: 816px = 8.5in page, 1in margins at 96px and 720px, ticks every 1/8in. */
++    function wmBuildRuler() {
++        const r = wmEl('wmRuler');
++        let h = '<div class="wm-ruler-shade" style="left:0;width:96px;"></div>' +
++                '<div class="wm-ruler-shade" style="left:720px;width:96px;"></div>';
++        for (let px = 12; px < 816; px += 12) {
++            const rel = px - 96;
++            if (rel >= 96 && rel % 96 === 0 && px < 720) {
++                h += `<div class="wm-ruler-num" style="left:${px}px;">${rel / 96}</div>`;
++            } else if (rel % 48 === 0) {
++                h += `<div class="wm-ruler-tick half" style="left:${px}px;"></div>`;
++            } else {
++                h += `<div class="wm-ruler-tick" style="left:${px}px;"></div>`;
++            }
++        }
++        h += '<div class="wm-ruler-rect" style="left:96px;"></div>' +
++             '<div class="wm-ruler-tri" style="left:96px;"></div>' +
++             '<div class="wm-ruler-tri" style="left:720px;"></div>';
++        r.innerHTML = h;
++    }
++
++    /* Keep toolbar state (B/I/U, style, font, size, align) in sync with the caret. */
++    function wmSyncToolbar() {
++        if (!wmActive) return;
++        const sel = window.getSelection();
++        const ed = wmEl('wmEditor');
++        if (!sel.rangeCount || !ed.contains(sel.anchorNode)) return;
++        wmLastRange = sel.getRangeAt(0).cloneRange();
++        const st = (id, cmd) => wmEl(id).classList.toggle('active', document.queryCommandState(cmd));
++        st('wmBoldBtn', 'bold'); st('wmItalicBtn', 'italic'); st('wmUnderBtn', 'underline');
++        st('wmAlignL', 'justifyLeft'); st('wmAlignC', 'justifyCenter'); st('wmAlignR', 'justifyRight');
++        let node = sel.anchorNode;
++        if (node && node.nodeType === 3) node = node.parentElement;
++        let block = node;
++        while (block && block !== ed && !/^(H1|H2|H3|P|DIV|LI)$/.test(block.tagName)) block = block.parentElement;
++        const tag = block && block !== ed ? block.tagName.toLowerCase() : 'p';
++        wmEl('wmStyle').value = ['h1', 'h2', 'h3'].includes(tag) ? tag : 'p';
++        if (node && node !== ed) {
++            const cs = getComputedStyle(node);
++            const fam = (cs.fontFamily || '').split(',')[0].replace(/["']/g, '').trim();
++            const opt = Array.from(wmEl('wmFont').options).find(o =>
++                o.value.replace(/["']/g, '').toLowerCase() === fam.toLowerCase());
++            if (opt) wmEl('wmFont').value = opt.value;
++            const pt = Math.round(parseFloat(cs.fontSize) * 72 / 96);
++            if (pt) { wmCurSize = pt; wmEl('wmSizeBox').textContent = pt; }
++        }
++    }
++
++    /* ---- wiring ---- */
++    (function wmWire() {
++        const ed = wmEl('wmEditor');
++        ed.addEventListener('input', wmEditorChanged);
++        ed.addEventListener('keydown', (e) => {
++            if (e.key === 'Tab') {
++                e.preventDefault();
++                document.execCommand(e.shiftKey ? 'outdent' : 'indent');
++                wmEditorChanged();
++            } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
++                e.preventDefault();
++                wmInsertLink();
++            }
++        });
++        /* Toolbar buttons must not steal the editor selection (selects need focus, skip those) */
++        wmEl('wmToolbar').addEventListener('mousedown', (e) => {
++            if (e.target.closest('.wm-tbtn')) e.preventDefault();
++        });
++        document.addEventListener('selectionchange', wmSyncToolbar);
++        document.addEventListener('keydown', (e) => {
++            if (!wmActive || e.key !== 'Escape') return;
++            const open = document.querySelector('.wm-palette.open');
++            if (open) { open.classList.remove('open'); return; }
++            exitWritingMode();
++        });
++        document.addEventListener('click', (e) => {
++            if (!e.target.closest('.wm-drop')) {
++                document.querySelectorAll('.wm-palette.open').forEach(p => p.classList.remove('open'));
++            }
++        });
++        window.addEventListener('beforeunload', () => { if (wmActive) wmFlush(true); });
++        document.addEventListener('visibilitychange', () => {
++            if (wmActive && document.visibilityState === 'hidden') wmFlush(true);
++        });
++    })();
++    </script>
+ </body>
+ </html>

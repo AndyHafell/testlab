@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IDEA SWIPE — Tinder for Video Ideas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="scanlines" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <h1 class="logo">IDEA<span class="logo-heart">&#9829;</span>SWIPE</h1>
+    <div class="counters">
+      <span class="counter counter-deck" title="Ideas left in deck">DECK <b id="count-deck">0</b></span>
+      <span class="counter counter-liked" title="Added to calendar">FILM <b id="count-liked">0</b></span>
+      <span class="counter counter-archived" title="Archived">ARCH <b id="count-archived">0</b></span>
+    </div>
+    <div class="topbar-actions">
+      <button id="btn-mute" class="pixel-btn small" title="Toggle sound">SND ON</button>
+      <button id="btn-reset" class="pixel-btn small danger" title="Start over">RESET</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- Swipe deck view -->
+    <section id="deck-view" class="view" hidden>
+      <div id="deck" class="deck"></div>
+      <div class="deck-controls">
+        <button id="btn-archive" class="pixel-btn ctl nope" title="Archive (←)">&#10006; ARCHIVE</button>
+        <button id="btn-undo" class="pixel-btn ctl undo" title="Undo (Z)">&#8630; UNDO</button>
+        <button id="btn-like" class="pixel-btn ctl like" title="Add to calendar (→)">&#9654; FILM IT</button>
+      </div>
+      <p class="hint">&larr; archive &nbsp;&middot;&nbsp; &rarr; content calendar &nbsp;&middot;&nbsp; Z undo &nbsp;&middot;&nbsp; or drag the card</p>
+    </section>
+
+    <!-- Deck-clear splash -->
+    <section id="splash-view" class="view" hidden>
+      <div class="splash">
+        <div class="splash-title">DECK CLEAR!</div>
+        <div class="splash-sub blink">BUILDING YOUR FILMING SCHEDULE&hellip;</div>
+      </div>
+    </section>
+
+    <!-- Weekly calendar view -->
+    <section id="calendar-view" class="view" hidden>
+      <div class="calendar-head">
+        <h2 class="calendar-title">THIS WEEK'S FILMING SCHEDULE</h2>
+        <div class="calendar-actions">
+          <button id="btn-copy" class="pixel-btn small">COPY MD</button>
+          <button id="btn-back" class="pixel-btn small">&#8630; UNDO SWIPE</button>
+        </div>
+      </div>
+      <p class="hint">drag cards to reorder days &nbsp;&middot;&nbsp; highest scores got the earliest slots</p>
+      <div id="calendar" class="calendar"></div>
+      <div id="calendar-empty" class="calendar-empty" hidden>
+        <div class="splash-title small-title">NO IDEAS MADE THE CUT</div>
+        <p>You archived the whole deck. Brutal. Hit RESET to swipe again.</p>
+      </div>
+    </section>
+
+    <!-- Loading / error -->
+    <section id="status-view" class="view">
+      <div class="splash"><div class="splash-sub blink" id="status-text">LOADING IDEAS&hellip;</div></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

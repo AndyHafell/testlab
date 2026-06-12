@@ -1,0 +1,1074 @@
+--- a/app.py
++++ b/app.py
+@@ -58,6 +58,9 @@
+ DB_PATH = Path(os.environ.get("DB_PATH", str(Path(__file__).resolve().parent / "videos.db")))
+ UPLOAD_DIR = Path(__file__).resolve().parent / "static" / "uploads"
+ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
++# Server-local drop folder for the admin's exported metric files (e.g. Studio
++# A/B test snapshots saved as data/ab_test_*.json). Env-overridable for tests.
++DATA_DIR = Path(os.environ.get("DATA_DIR", str(Path(__file__).resolve().parent / "data")))
+ BLOTATO_API_KEY = os.environ.get("BLOTATO_API_KEY", "")
+ BLOTATO_X_ACCOUNT_ID = int(os.environ.get("BLOTATO_X_ACCOUNT_ID", "13469"))
+ YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
+@@ -613,6 +616,44 @@
+         elements TEXT NOT NULL DEFAULT '{}',
+         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+         updated_at TEXT
++    )""")
++    # ── Feedback Lab (A/B packaging tests + post-publish Studio check-ins) ──
++    # One ab_tests row per tracked published video; variants is a JSON list of
++    # {label, title, thumb_desc, watch_time_share_pct, leading}. ab_checkins
++    # holds one row per morning screenshot drop (day_index 1 = first 24h).
++    conn.execute("""CREATE TABLE IF NOT EXISTS ab_tests (
++        id INTEGER PRIMARY KEY AUTOINCREMENT,
++        user_id INTEGER NOT NULL,
++        card_id INTEGER,
++        source_file TEXT,
++        video_title TEXT NOT NULL,
++        published TEXT DEFAULT '',
++        test_type TEXT DEFAULT 'title_and_thumbnail',
++        status TEXT DEFAULT 'running',
++        winner_label TEXT DEFAULT '',
++        variants TEXT DEFAULT '[]',
++        snapshot_at TEXT DEFAULT '',
++        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
++        updated_at TEXT
++    )""")
++    conn.execute("""CREATE TABLE IF NOT EXISTS ab_checkins (
++        id INTEGER PRIMARY KEY AUTOINCREMENT,
++        user_id INTEGER NOT NULL,
++        ab_test_id INTEGER NOT NULL,
++        day_index INTEGER DEFAULT 1,
++        screenshot_url TEXT DEFAULT '',
++        views INTEGER,
++        typical_low INTEGER,
++        typical_high INTEGER,
++        ctr_pct REAL,
++        avd TEXT DEFAULT '',
++        video_length TEXT DEFAULT '',
++        ranking TEXT DEFAULT '',
++        likes INTEGER,
++        comments INTEGER,
++        extract_error TEXT DEFAULT '',
++        raw_extract TEXT DEFAULT '{}',
++        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+     )""")
+     user_cols = [
+         ("skool_handle",     "TEXT"),
+@@ -1089,6 +1130,8 @@
+         "blotato_platforms": _blotato_connected_platforms(),
+         "can_import_airtable_keywords": _is_admin_email(identity_email),
+         "can_use_pixel_face_thumbs": _is_admin_email(identity_email),
++        # Feedback Lab soft-launch: admin-only until FEEDBACK_LAB_OPEN=1.
++        "feedback_lab_enabled": _feedback_lab_enabled_for_session(),
+     })
+ 
+ 
+@@ -6854,7 +6897,7 @@
+ TITLE: "{title}"
+ 
+ Judge the thumbnail (attached image) together with the title on: instant clarity of the promise, curiosity / open-loop tension, visual contrast with a single clear focal point, text legibility at small size, emotional pull, and title-thumbnail synergy (they should ADD to each other, not repeat). 7 = solid, 9-10 = scroll-stopping, below 5 = weak.
+-
++{learnings}
+ Return ONLY JSON: {{"score": <integer 0-10>, "feedback": "<1-2 sentences: the single strongest thing, then the single biggest fix>"}}"""
+ 
+ # Scores EVERY thumbnail option in ONE multi-image call. The images are attached
+@@ -6889,7 +6932,7 @@
+ Title: "{title}"
+ Packaging score (thumbnail + title clickability): {pkg}/10
+ Story score (hook / pacing / payoff): {story}/10
+-
++{learnings}
+ Predict where this new video will RANK among those {n} recent videos by views.
+ - Rank 1 of {n} = will get the MOST views (best). Rank {n} of {n} = the FEWEST (worst).
+ - Packaging drives the click, so weight it heavily — but TOPIC/DEMAND matters most: look at which past titles in the list won big vs flopped, and how similar this new title's topic is to them. A polished video on a low-demand topic still ranks low.
+@@ -7001,6 +7044,10 @@
+     except sqlite3.Error:
+         pass
+     recent = _recent_channel_videos(conn, n=10, exclude_video_id=(v["video_id"] if v else None))
++    # Feedback Lab digest — real A/B winners + measured post-publish data feed
++    # both the packaging score and the ranking prediction.
++    fl = _feedback_learnings(conn, uid)
++    learn = _learnings_block(fl)
+     conn.close()
+ 
+     title = (v["title"] if v else "") or ""
+@@ -7036,7 +7083,9 @@
+     img_bytes, img_mime = _load_image_for_gemini(live_thumb)
+     if img_bytes:
+         try:
+-            r = _gemini_score_json(api_key, _PACKAGING_SCORE_PROMPT.format(title=title or "(untitled)"),
++            r = _gemini_score_json(api_key,
++                                   _PACKAGING_SCORE_PROMPT.format(title=title or "(untitled)",
++                                                                  learnings=learn),
+                                    img_bytes, img_mime)
+             packaging = {"score": _clamp_score(r.get("score")), "feedback": str(r.get("feedback") or "")[:400]}
+         except Exception as e:  # noqa: BLE001
+@@ -7114,7 +7163,7 @@
+         try:
+             r = _gemini_score_json(api_key, _PREDICTION_PROMPT.format(
+                 n=n, recent_list=recent_list, title=title or "(untitled)",
+-                pkg=packaging["score"], story=story["score"]))
++                pkg=packaging["score"], story=story["score"], learnings=learn))
+             rank = max(1, min(n, int(round(float(r.get("rank"))))))
+             prediction = {
+                 "rank": rank, "of": n,
+@@ -7129,6 +7178,7 @@
+ 
+     score_obj = {"packaging": packaging, "story": story, "prediction": prediction,
+                  "thumb_ranking": thumb_ranking,
++                 "informed_by": {"ab_tests": fl["ab_tests"], "checkins": fl["checkins"]},
+                  "generated_at": datetime.now(timezone.utc).isoformat()}
+     # Cache on meta (re-read fresh to merge, since the Gemini calls took a while).
+     conn = get_db()
+@@ -7139,8 +7189,482 @@
+     conn.close()
+ 
+     return jsonify({"status": "scored", "prereqs": prereqs, "errors": errors, **score_obj})
++
++
++# ── Feedback Lab: A/B packaging tests + post-publish Studio check-ins ──────
++# Closes the publish → measure → learn loop. ab_tests tracks each published
++# video's Studio title/thumbnail experiment; ab_checkins stores the metrics
++# read out of the morning-after Studio screenshot. _feedback_learnings()
++# digests both into the AI Final Review prompts on the Publish page.
++
++# Soft-launch switch: the Feedback Lab is admin-only until FEEDBACK_LAB_OPEN=1
++# in the env (a one-line flip to open it to every member; routes + nav button
++# both key off it).
++FEEDBACK_LAB_OPEN = os.environ.get("FEEDBACK_LAB_OPEN", "") == "1"
++
++
++def _feedback_lab_enabled_for_session():
++    if FEEDBACK_LAB_OPEN:
++        return True
++    email = (session.get("impersonator_email") or session.get("identity_email")
++             or session.get("email") or "")
++    return _is_admin_email(email)
++
++
++def _feedback_admin_only():
++    """403 response for non-admins while the Lab is in private testing, else None."""
++    if _feedback_lab_enabled_for_session():
++        return None
++    return jsonify({"error": "Feedback Lab is in private testing."}), 403
++
++
++_AB_VARIANT_LABELS = "ABCD"
++
++
++def _clean_ab_variants(raw):
++    """Sanitize a client/file variants list → ≤4 dicts with known keys only."""
++    out = []
++    for i, v in enumerate(list(raw or [])[:4]):
++        if not isinstance(v, dict):
++            continue
++        share = v.get("watch_time_share_pct")
++        try:
++            share = None if share is None else round(float(share), 1)
++        except (TypeError, ValueError):
++            share = None
++        out.append({
++            "label": (str(v.get("label") or "").strip() or _AB_VARIANT_LABELS[i])[:8],
++            "title": str(v.get("title") or "").strip()[:200],
++            "thumb_desc": str(v.get("thumb_desc") or "").strip()[:300],
++            "watch_time_share_pct": share,
++            "leading": bool(v.get("leading")),
++        })
++    return out
++
++
++def _ab_test_dict(conn, row, with_checkins=True):
++    d = dict(row)
++    try:
++        d["variants"] = json.loads(row["variants"] or "[]")
++    except (TypeError, ValueError):
++        d["variants"] = []
++    if with_checkins:
++        rows = conn.execute(
++            "SELECT * FROM ab_checkins WHERE ab_test_id = ? ORDER BY day_index, id",
++            (row["id"],)).fetchall()
++        d["checkins"] = [dict(c) for c in rows]
++    return d
++
++
++def _owned_ab_test(conn, tid, uid):
++    return conn.execute(
++        "SELECT * FROM ab_tests WHERE id = ? AND user_id = ?", (tid, uid)).fetchone()
++
++
++def _import_ab_test_files(conn, uid):
++    """Insert-only sync of DATA_DIR/ab_test_*.json into the admin's ab_tests.
++
++    Keyed by filename: a file is imported once, then the app's rows are the
++    source of truth (re-import never clobbers crowns/edits). The JSON's
++    first_24h block seeds check-in day 1 when no day-1 check-in exists yet.
++    Malformed files are logged and skipped — the Lab page must never 500."""
++    try:
++        files = sorted(DATA_DIR.glob("ab_test_*.json"))
++    except OSError:
++        return
++    for p in files:
++        try:
++            data = json.loads(p.read_text(encoding="utf-8"))
++        except (OSError, ValueError) as e:
++            app.logger.warning("feedback import: skipping %s (%s)", p.name, e)
++            continue
++        row = conn.execute(
++            "SELECT id FROM ab_tests WHERE user_id = ? AND source_file = ?",
++            (uid, p.name)).fetchone()
++        if row:
++            test_id = row["id"]
++        else:
++            title = str(data.get("video") or data.get("video_title") or "").strip()
++            if not title:
++                app.logger.warning("feedback import: %s has no video title", p.name)
++                continue
++            cur = conn.execute(
++                "INSERT INTO ab_tests (user_id, source_file, video_title, published, "
++                "test_type, status, variants, snapshot_at, updated_at) "
++                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
++                (uid, p.name, title[:300], str(data.get("published") or "")[:40],
++                 str(data.get("test_type") or "title_and_thumbnail")[:60],
++                 "complete" if data.get("status") == "complete" else "running",
++                 json.dumps(_clean_ab_variants(data.get("variants"))),
++                 str(data.get("snapshot_at") or "")[:40]))
++            test_id = cur.lastrowid
++        f24 = data.get("first_24h") or {}
++        if f24 and not conn.execute(
++                "SELECT id FROM ab_checkins WHERE ab_test_id = ? AND day_index = 1",
++                (test_id,)).fetchone():
++            band = f24.get("typical_band") or [None, None]
++
++            def _i(v):
++                try:
++                    return None if v is None else int(v)
++                except (TypeError, ValueError):
++                    return None
++            try:
++                ctr = None if f24.get("ctr_pct") is None else float(f24["ctr_pct"])
++            except (TypeError, ValueError):
++                ctr = None
++            conn.execute(
++                "INSERT INTO ab_checkins (user_id, ab_test_id, day_index, views, "
++                "typical_low, typical_high, ctr_pct, avd, video_length, ranking, "
++                "likes, comments, raw_extract) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
++                (uid, test_id, _i(f24.get("views")),
++                 _i(band[0] if len(band) > 0 else None),
++                 _i(band[1] if len(band) > 1 else None),
++                 ctr, str(f24.get("avd") or "")[:20],
++                 str(f24.get("video_length") or "")[:20],
++                 str(f24.get("ranking") or "")[:40],
++                 _i(f24.get("likes")), _i(f24.get("comments")),
++                 json.dumps(f24)))
++    conn.commit()
++
++
++@app.route("/api/feedback/lab")
++@login_required
++def feedback_lab():
++    gate = _feedback_admin_only()
++    if gate:
++        return gate
++    uid = current_user_id()
++    conn = get_db()
++    # data/ab_test_*.json are the admin's server-local Studio exports — lazily
++    # imported (insert-only, keyed by filename) so real test data shows up
++    # without a manual entry step. Non-admins never see them.
++    if _is_admin_email(session.get("identity_email") or session.get("email", "")):
++        _import_ab_test_files(conn, uid)
++    rows = conn.execute(
++        "SELECT * FROM ab_tests WHERE user_id = ? "
++        "ORDER BY COALESCE(NULLIF(published,''), created_at) DESC, id DESC",
++        (uid,)).fetchall()
++    out = [_ab_test_dict(conn, r) for r in rows]
++    conn.close()
++    return jsonify({"tests": out})
++
++
++@app.route("/api/feedback/ab-tests", methods=["POST"])
++@login_required
++def create_ab_test():
++    gate = _feedback_admin_only()
++    if gate:
++        return gate
++    uid = current_user_id()
++    data = request.get_json(force=True, silent=True) or {}
++    title = (data.get("video_title") or "").strip()[:300]
++    if not title:
++        return jsonify({"error": "video_title required"}), 400
++    variants = _clean_ab_variants(data.get("variants"))
++    conn = get_db()
++    cur = conn.execute(
++        "INSERT INTO ab_tests (user_id, card_id, video_title, published, test_type, "
++        "status, variants, snapshot_at, updated_at) "
++        "VALUES (?, ?, ?, ?, ?, 'running', ?, ?, datetime('now'))",
++        (uid, data.get("card_id"), title,
++         str(data.get("published") or "")[:40],
++         str(data.get("test_type") or "title_and_thumbnail")[:60],
++         json.dumps(variants), str(data.get("snapshot_at") or "")[:40]))
++    conn.commit()
++    row = conn.execute("SELECT * FROM ab_tests WHERE id = ?", (cur.lastrowid,)).fetchone()
++    out = _ab_test_dict(conn, row)
++    conn.close()
++    return jsonify({"ok": True, "test": out}), 201
++
++
++@app.route("/api/feedback/ab-tests/<int:tid>", methods=["POST", "DELETE"])
++@login_required
++def update_ab_test(tid):
++    gate = _feedback_admin_only()
++    if gate:
++        return gate
++    uid = current_user_id()
++    conn = get_db()
++    row = _owned_ab_test(conn, tid, uid)
++    if not row:
++        conn.close()
++        return jsonify({"error": "not found"}), 404
++    if request.method == "DELETE":
++        conn.execute("DELETE FROM ab_checkins WHERE ab_test_id = ?", (tid,))
++        conn.execute("DELETE FROM ab_tests WHERE id = ?", (tid,))
++        conn.commit()
++        conn.close()
++        return jsonify({"ok": True})
++
++    data = request.get_json(force=True, silent=True) or {}
++    sets, args = [], []
++    if "video_title" in data and (data.get("video_title") or "").strip():
++        sets.append("video_title = ?"); args.append(str(data["video_title"]).strip()[:300])
++    if "published" in data:
++        sets.append("published = ?"); args.append(str(data.get("published") or "")[:40])
++    if "variants" in data:
++        variants = _clean_ab_variants(data.get("variants"))
++        sets.append("variants = ?"); args.append(json.dumps(variants))
++    else:
++        try:
++            variants = json.loads(row["variants"] or "[]")
++        except (TypeError, ValueError):
++            variants = []
++    if "winner_label" in data:
++        wl = str(data.get("winner_label") or "").strip()[:8]
++        if wl and wl not in [v.get("label") for v in variants]:
++            conn.close()
++            return jsonify({"error": "winner_label must match a variant label"}), 400
++        sets.append("winner_label = ?"); args.append(wl)
++        # Crowning implies the test is over (unless the caller says otherwise).
++        if wl and "status" not in data:
++            sets.append("status = 'complete'")
++    if "status" in data:
++        st = str(data.get("status") or "")
++        if st not in ("running", "complete"):
++            conn.close()
++            return jsonify({"error": "status must be running|complete"}), 400
++        sets.append("status = ?"); args.append(st)
++    if sets:
++        sets.append("updated_at = datetime('now')")
++        conn.execute(f"UPDATE ab_tests SET {', '.join(sets)} WHERE id = ?", (*args, tid))
++        conn.commit()
++    row = conn.execute("SELECT * FROM ab_tests WHERE id = ?", (tid,)).fetchone()
++    out = _ab_test_dict(conn, row)
++    conn.close()
++    return jsonify({"ok": True, "test": out})
+ 
+ 
++_CHECKIN_EXTRACT_PROMPT = """You are reading a YouTube Studio analytics screenshot the creator captured the morning after publishing (the first-24-hours / first-days view).
++
++Extract EXACTLY these fields. Use null for anything not visible. Numbers must be plain (strip commas; "2.2K" → 2200).
++- views: total views shown for this video so far
++- typical_low, typical_high: the channel's "typical performance" band on the views chart (the shaded range endpoints)
++- ctr_pct: impressions click-through rate, percent (e.g. 9.7)
++- avd: average view duration, like "3:08"
++- video_length: full video length if visible, like "12:15"
++- ranking: Studio's ranking-by-views line, exactly like "1 of 10"
++- likes, comments: counts if visible
++
++Return ONLY JSON with exactly those keys."""
++
++_CHECKIN_SCHEMA = {
++    "type": "object",
++    "properties": {
++        "views": {"type": "integer", "nullable": True},
++        "typical_low": {"type": "integer", "nullable": True},
++        "typical_high": {"type": "integer", "nullable": True},
++        "ctr_pct": {"type": "number", "nullable": True},
++        "avd": {"type": "string", "nullable": True},
++        "video_length": {"type": "string", "nullable": True},
++        "ranking": {"type": "string", "nullable": True},
++        "likes": {"type": "integer", "nullable": True},
++        "comments": {"type": "integer", "nullable": True},
++    },
++}
++
++_CHECKIN_INT_COLS = ("views", "typical_low", "typical_high", "likes", "comments")
++_CHECKIN_STR_COLS = ("avd", "video_length", "ranking")
++
++
++def _checkin_fields_from_extract(r):
++    """Model JSON → sanitized column dict (ints/float/strings, junk → None)."""
++    out = {}
++    for k in _CHECKIN_INT_COLS:
++        try:
++            out[k] = None if r.get(k) is None else int(r[k])
++        except (TypeError, ValueError):
++            out[k] = None
++    try:
++        out["ctr_pct"] = None if r.get("ctr_pct") is None else round(float(r["ctr_pct"]), 2)
++    except (TypeError, ValueError):
++        out["ctr_pct"] = None
++    for k in _CHECKIN_STR_COLS:
++        out[k] = str(r.get(k) or "")[:40]
++    return out
++
++
++def _run_checkin_extract(conn, uid, cid, img_bytes, mime):
++    """Vision-extract metrics onto an existing ab_checkins row. Returns
++    (ok, err). Spends checkin_extract budget only on success."""
++    api_key = _user_gemini_key(uid)
++    if not api_key:
++        err = "No Gemini API key — add one in Settings."
++        conn.execute("UPDATE ab_checkins SET extract_error = ? WHERE id = ?", (err, cid))
++        return False, err
++    try:
++        r = _gemini_score_json(api_key, _CHECKIN_EXTRACT_PROMPT, img_bytes, mime,
++                               response_schema=_CHECKIN_SCHEMA, timeout=90)
++    except Exception as e:  # noqa: BLE001
++        err = f"{type(e).__name__}: {e}"[:300]
++        conn.execute("UPDATE ab_checkins SET extract_error = ? WHERE id = ?", (err, cid))
++        return False, err
++    f = _checkin_fields_from_extract(r or {})
++    conn.execute(
++        "UPDATE ab_checkins SET views=?, typical_low=?, typical_high=?, ctr_pct=?, "
++        "avd=?, video_length=?, ranking=?, likes=?, comments=?, extract_error='', "
++        "raw_extract=? WHERE id=?",
++        (f["views"], f["typical_low"], f["typical_high"], f["ctr_pct"], f["avd"],
++         f["video_length"], f["ranking"], f["likes"], f["comments"],
++         json.dumps(r or {}), cid))
++    ub.record_spend(conn, uid, "checkin_extract")
++    return True, None
++
++
++@app.route("/api/feedback/ab-tests/<int:tid>/checkin", methods=["POST"])
++@login_required
++def ab_test_checkin(tid):
++    gate = _feedback_admin_only()
++    if gate:
++        return gate
++    uid = current_user_id()
++    conn = get_db()
++    if not _owned_ab_test(conn, tid, uid):
++        conn.close()
++        return jsonify({"error": "not found"}), 404
++    if "file" not in request.files or not request.files["file"].filename:
++        conn.close()
++        return jsonify({"error": "No screenshot provided"}), 400
++    f = request.files["file"]
++    ext = Path(f.filename).suffix.lower()
++    if ext not in (".png", ".jpg", ".jpeg", ".webp"):
++        conn.close()
++        return jsonify({"error": "Invalid file type"}), 400
++    if not ub.can_afford(conn, uid, "checkin_extract"):
++        return budget_exhausted_response(conn, uid)
++
++    out_dir = UPLOAD_DIR / "checkins" / str(tid)
++    out_dir.mkdir(parents=True, exist_ok=True)
++    filename = f"{uuid.uuid4().hex}{ext}"
++    img_bytes = f.read()
++    (out_dir / filename).write_bytes(img_bytes)
++    url = f"/static/uploads/checkins/{tid}/{filename}"
++    mime = "image/png" if ext == ".png" else ("image/webp" if ext == ".webp" else "image/jpeg")
++
++    day = conn.execute(
++        "SELECT COALESCE(MAX(day_index), 0) + 1 AS d FROM ab_checkins WHERE ab_test_id = ?",
++        (tid,)).fetchone()["d"]
++    cur = conn.execute(
++        "INSERT INTO ab_checkins (user_id, ab_test_id, day_index, screenshot_url) "
++        "VALUES (?, ?, ?, ?)", (uid, tid, day, url))
++    cid = cur.lastrowid
++    _run_checkin_extract(conn, uid, cid, img_bytes, mime)
++    conn.commit()
++    row = conn.execute("SELECT * FROM ab_checkins WHERE id = ?", (cid,)).fetchone()
++    conn.close()
++    return jsonify({"ok": True, "checkin": dict(row)}), 201
++
++
++@app.route("/api/feedback/checkins/<int:cid>/extract", methods=["POST"])
++@login_required
++def checkin_re_extract(cid):
++    gate = _feedback_admin_only()
++    if gate:
++        return gate
++    uid = current_user_id()
++    conn = get_db()
++    row = conn.execute("SELECT * FROM ab_checkins WHERE id = ? AND user_id = ?",
++                       (cid, uid)).fetchone()
++    if not row:
++        conn.close()
++        return jsonify({"error": "not found"}), 404
++    if not ub.can_afford(conn, uid, "checkin_extract"):
++        return budget_exhausted_response(conn, uid)
++    img_bytes, mime = _load_image_for_gemini(row["screenshot_url"])
++    if not img_bytes:
++        conn.close()
++        return jsonify({"error": "screenshot file missing"}), 410
++    ok, err = _run_checkin_extract(conn, uid, cid, img_bytes, mime)
++    conn.commit()
++    row = conn.execute("SELECT * FROM ab_checkins WHERE id = ?", (cid,)).fetchone()
++    conn.close()
++    if not ok:
++        return jsonify({"error": err, "checkin": dict(row)}), 502
++    return jsonify({"ok": True, "checkin": dict(row)})
++
++
++@app.route("/api/feedback/checkins/<int:cid>", methods=["DELETE"])
++@login_required
++def delete_checkin(cid):
++    gate = _feedback_admin_only()
++    if gate:
++        return gate
++    uid = current_user_id()
++    conn = get_db()
++    row = conn.execute("SELECT id FROM ab_checkins WHERE id = ? AND user_id = ?",
++                       (cid, uid)).fetchone()
++    if not row:
++        conn.close()
++        return jsonify({"error": "not found"}), 404
++    conn.execute("DELETE FROM ab_checkins WHERE id = ?", (cid,))
++    conn.commit()
++    conn.close()
++    return jsonify({"ok": True})
++
++
++def _feedback_learnings(conn, uid):
++    """Digest the user's Feedback Lab into prompt-ready text.
++
++    {ab_tests, checkins, text} — text is a capped plain-text summary of each
++    test's variants/shares/winner plus every check-in's measured metrics.
++    Empty lab → text "" so the scoring prompts are byte-identical to the
++    pre-Lab behavior."""
++    try:
++        tests = conn.execute(
++            "SELECT * FROM ab_tests WHERE user_id = ? "
++            "ORDER BY COALESCE(NULLIF(published,''), created_at) DESC, id DESC LIMIT 6",
++            (uid,)).fetchall()
++    except sqlite3.Error:
++        return {"ab_tests": 0, "checkins": 0, "text": ""}
++    lines, n_checkins = [], 0
++    for t in tests:
++        try:
++            variants = json.loads(t["variants"] or "[]")
++        except (TypeError, ValueError):
++            variants = []
++        lines.append(f"TEST — \"{t['video_title']}\" "
++                     f"({'complete' if t['status'] == 'complete' else 'still running'}):")
++        for v in variants:
++            tag = ""
++            if t["status"] == "complete" and v.get("label") == t["winner_label"]:
++                tag = " ← WINNER"
++            elif t["status"] != "complete" and v.get("leading"):
++                tag = " ← leading"
++            share = v.get("watch_time_share_pct")
++            share_s = f" — {share}% watch-time share" if share is not None else ""
++            lines.append(f"  [{v.get('label')}] \"{v.get('title')}\" "
++                         f"(thumb: {v.get('thumb_desc')}){share_s}{tag}")
++        cks = conn.execute(
++            "SELECT * FROM ab_checkins WHERE ab_test_id = ? AND views IS NOT NULL "
++            "ORDER BY day_index", (t["id"],)).fetchall()
++        for c in cks:
++            n_checkins += 1
++            band = (f" vs typical {c['typical_low']:,}–{c['typical_high']:,}"
++                    if c["typical_low"] is not None and c["typical_high"] is not None else "")
++            bits = [f"  Day {c['day_index']}: {c['views']:,} views{band}"]
++            if c["ctr_pct"] is not None:
++                bits.append(f"CTR {c['ctr_pct']}%")
++            if c["avd"]:
++                bits.append(f"AVD {c['avd']}")
++            if c["ranking"]:
++                bits.append(f"ranked {c['ranking']} on the channel")
++            lines.append(", ".join(bits))
++    return {"ab_tests": len(tests), "checkins": n_checkins,
++            "text": "\n".join(lines)[:1800]}
++
++
++def _learnings_block(fl):
++    """The shared prompt insert. Empty when the lab has no data."""
++    if not fl.get("text"):
++        return ""
++    return ("\nWHAT'S ACTUALLY BEEN WINNING ON THIS CHANNEL — real A/B test results "
++            "and measured post-publish Studio data from the creator's Feedback Lab. "
++            "These observed patterns outrank generic best practice; score/predict "
++            "against them (measured CTRs and first-day rankings are the strongest "
++            "signal):\n" + fl["text"] + "\n")
++
++
+ # ── Publish view: manual Ready-Queue order (drag to reorder) ──────────────
+ @app.route("/api/publish-queue/order", methods=["GET"])
+ def publish_queue_order_get():
+--- a/templates/index.html
++++ b/templates/index.html
+@@ -2504,6 +2504,65 @@
+         .content-container { display: none; padding: 20px; max-width: 820px; margin: 0 auto; }
+         .content-container.visible { display: block !important; }
+ 
++        /* --- Feedback tab: Feedback Lab (A/B tracker + Studio check-ins) --- */
++        .tab-feedback { margin-left: auto; }
++        .fb-container { display: none; padding: 20px; max-width: 1280px; margin: 0 auto; }
++        .fb-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; }
++        .fb-header h2 { margin: 0; color: #fff; }
++        .fb-sub { color: #888; font-size: 13px; flex: 1; }
++        .fb-new-btn { background: #3ddc84; color: #0f0f0f; border: none; border-radius: 8px; padding: 8px 14px; font-weight: 600; cursor: pointer; font-size: 13px; }
++        .fb-new-btn:hover { filter: brightness(1.1); }
++        .fb-new-form { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
++        .fb-form-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
++        .fb-form-row input { background: #111; border: 1px solid #333; border-radius: 6px; color: #f1f1f1; padding: 8px 10px; font-size: 13px; }
++        .fb-form-row input[type="text"] { flex: 1; }
++        .fb-create-btn { background: #5b9bd5; color: #fff; border: none; border-radius: 6px; padding: 8px 14px; cursor: pointer; font-size: 13px; }
++        .fb-empty { color: #777; background: #161616; border: 1px dashed #333; border-radius: 12px; padding: 28px; text-align: center; font-size: 14px; }
++        .fb-test { background: #1a1a1a; border: 1px solid #242424; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
++        .fb-test-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
++        .fb-test-title { color: #fff; font-weight: 600; font-size: 15px; }
++        .fb-test-meta { color: #666; font-size: 12px; }
++        .fb-pill { font-size: 10px; font-weight: 700; letter-spacing: 0.5px; border-radius: 10px; padding: 3px 8px; }
++        .fb-pill-running { background: rgba(224,179,65,0.15); color: #e0b341; border: 1px solid rgba(224,179,65,0.4); }
++        .fb-pill-done { background: rgba(61,220,132,0.15); color: #3ddc84; border: 1px solid rgba(61,220,132,0.4); }
++        .fb-variants { display: grid; gap: 10px; margin-bottom: 12px; }
++        @media (max-width: 800px) { .fb-variants { grid-template-columns: 1fr !important; } }
++        .fb-variant { background: #141414; border: 1px solid #2a2a2a; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
++        .fb-variant.winner { border-color: rgba(61,220,132,0.6); box-shadow: 0 0 0 1px rgba(61,220,132,0.25); }
++        .fb-variant.leading { border-color: rgba(224,179,65,0.5); }
++        .fb-var-head { display: flex; align-items: center; gap: 8px; }
++        .fb-var-label { background: #2a2a2a; color: #f1f1f1; font-weight: 700; font-size: 11px; border-radius: 6px; padding: 2px 7px; }
++        .fb-crowned { color: #3ddc84; font-size: 11px; font-weight: 700; }
++        .fb-leading-tag { color: #e0b341; font-size: 10px; font-weight: 700; letter-spacing: 0.5px; }
++        .fb-var-title { color: #f1f1f1; font-size: 13px; line-height: 1.35; }
++        .fb-var-thumb { color: #888; font-size: 11.5px; font-style: italic; }
++        .fb-share-row { display: flex; align-items: center; gap: 8px; margin-top: auto; }
++        .fb-share-track { flex: 1; height: 8px; background: #242424; border-radius: 4px; overflow: hidden; }
++        .fb-share-fill { height: 100%; background: #555; border-radius: 4px; }
++        .fb-share-fill.lead { background: #3ddc84; }
++        .fb-share-pct { background: none; border: none; color: #aaa; font-size: 12px; cursor: pointer; padding: 2px 4px; }
++        .fb-share-pct:hover { color: #fff; text-decoration: underline; }
++        .fb-mini-btn { background: #242424; border: 1px solid #333; color: #ccc; border-radius: 6px; padding: 4px 9px; font-size: 11.5px; cursor: pointer; }
++        .fb-mini-btn:hover { background: #333; color: #fff; }
++        .fb-mini-btn.fb-danger:hover { background: #e05252; border-color: #e05252; color: #fff; }
++        .fb-checkins { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
++        .fb-checkin { display: flex; align-items: center; gap: 14px; background: #141414; border: 1px solid #2a2a2a; border-radius: 10px; padding: 10px 14px; flex-wrap: wrap; }
++        .fb-checkin-failed { border-color: rgba(229,115,115,0.4); }
++        .fb-day { color: #888; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; min-width: 44px; }
++        .fb-views { font-size: 18px; font-weight: 700; }
++        .fb-vs { color: #777; font-size: 12px; }
++        .fb-band-track { position: relative; width: 130px; height: 10px; background: #222; border-radius: 5px; }
++        .fb-band-range { position: absolute; top: 0; height: 100%; background: #3a3a3a; border-radius: 5px; }
++        .fb-band-marker { position: absolute; top: -2px; width: 4px; height: 14px; border-radius: 2px; background: #3ddc84; transform: translateX(-50%); }
++        .fb-stat { color: #ccc; font-size: 12.5px; }
++        .fb-stat b { color: #fff; }
++        .fb-rank-badge { background: rgba(91,155,213,0.15); border: 1px solid rgba(91,155,213,0.45); color: #5b9bd5; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 3px 9px; }
++        .fb-shot-link { color: #5b9bd5; font-size: 11.5px; }
++        .fb-ck-err { color: #e57373; font-size: 12px; }
++        .fb-drop { border: 1.5px dashed #333; border-radius: 10px; padding: 14px; text-align: center; color: #777; font-size: 12.5px; cursor: pointer; transition: border-color 0.15s, color 0.15s; }
++        .fb-drop:hover, .fb-drop.over { border-color: #3ddc84; color: #3ddc84; }
++        .fb-drop.busy { border-color: #5b9bd5; color: #5b9bd5; cursor: wait; }
++
+         /* --- Publishing page (Studio clone) — Beat 1: shell + Ready Queue --- */
+         .publishing-container { display: none; padding: 20px; }
+         .pub-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; }
+@@ -3196,6 +3255,13 @@
+         <button class="tab tab-edit-only" id="addStageBtn" onclick="addStage()" style="display:none;">+ Stage</button>
+         <button class="tab tab-edit-only" id="resetTabsBtn" onclick="resetTabConfig()" style="display:none;" title="Reset tabs to default">Reset</button>
+         <button class="tab" id="newVideoBtn" style="display:none; padding:4px 10px; font-size:16px; min-width:0;" onclick="createBlankVideo()" title="Create new video card">+</button>
++        <!-- Fixed page-tab (not part of the editable pipeline config) pinned far
++             right — renderPipelineTabs() only removes .pipeline-tab/.zone-divider
++             nodes, so this survives re-renders; setTab()'s .tab sweep handles
++             the active state via data-tab. -->
++        <button class="tab tab-feedback" data-tab="feedback" id="feedbackTabBtn" onclick="setTab('feedback')"
++                title="Feedback Lab — A/B tests, check-ins, what's actually winning"
++                style="display:none;">Feedback</button>
+     </div>
+ 
+     <div class="sort-bar">
+@@ -3291,10 +3357,34 @@
+             </aside>
+             <!-- Calendar / Schedule view (plan-only) — fills workspace+rail when active -->
+             <section class="pub-calendar" id="pubCalendar" style="display:none;"></section>
++        </div>
++    </div>
++
++    <!-- Feedback tab: the Feedback Lab — A/B test tracker + daily Studio
++         check-ins. Everything it learns feeds the AI Final Review on Publish. -->
++    <div class="fb-container" id="feedbackContainer">
++        <div class="fb-header">
++            <h2>Feedback Lab</h2>
++            <span class="fb-sub">A/B tests + morning-after Studio check-ins. Everything here feeds the AI Final Review on the Publish page.</span>
++            <button class="fb-new-btn" onclick="fbToggleNewForm()">＋ New test</button>
++        </div>
++        <div class="fb-new-form" id="fbNewForm" style="display:none;">
++            <div class="fb-form-row">
++                <input type="text" id="fbNewTitle" placeholder="Video title (as published)" maxlength="300">
++                <input type="date" id="fbNewDate" title="Publish date">
++            </div>
++            <div id="fbNewVariants"></div>
++            <div class="fb-form-row" style="margin-bottom:0;">
++                <button class="fb-mini-btn" onclick="fbAddVariantRow()">＋ variant</button>
++                <span style="flex:1"></span>
++                <button class="fb-mini-btn" onclick="fbToggleNewForm(false)">Cancel</button>
++                <button class="fb-create-btn" onclick="fbCreateTest()">Create test</button>
++            </div>
+         </div>
++        <div id="fbTestList"></div>
+     </div>
+     <!-- Video Detail Modal -->
+-    
++
+     <div class="content-container" id="twitterContainer">
+         <div style="display:flex; align-items:center; gap:12px; margin-bottom:20px;">
+             <h2 style="margin:0; color:#fff;">Twitter</h2>
+@@ -4639,13 +4729,15 @@
+             const isContent = tab === 'content';
+             document.getElementById('newVideoBtn').style.display = tab === 'packaging' ? '' : 'none';
+             const isTwitter = tab === 'twitter';
+-            const isSpecial = isCreators || isContent || isTwitter;
++            const isFeedback = tab === 'feedback';
++            const isSpecial = isCreators || isContent || isTwitter || isFeedback;
+             // Publish view: the Studio-clone page, shown only on the Published tab.
+             const showPublish = tab === 'published' && publishViewMode;
+             document.getElementById('videoGrid').style.display = (isSpecial || showPublish) ? 'none' : '';
+             document.getElementById('creatorsContainer').classList.toggle('visible', isCreators);
+             document.getElementById('contentContainer').style.display = isContent ? 'block' : 'none';
+             document.getElementById('twitterContainer').style.display = isTwitter ? 'block' : 'none';
++            document.getElementById('feedbackContainer').style.display = isFeedback ? 'block' : 'none';
+             document.getElementById('publishingContainer').style.display = showPublish ? 'block' : 'none';
+             document.getElementById('channelsBar').style.display = (isSpecial || showPublish) ? 'none' : '';
+             document.querySelector('.sort-bar').style.display = isSpecial ? 'none' : '';
+@@ -4667,6 +4759,8 @@
+                 loadContentList();
+             } else if (isTwitter) {
+                 loadTweetFeed();
++            } else if (isFeedback) {
++                loadFeedbackLab();
+             } else if (showPublish) {
+                 loadPublishingQueue();
+                 _applyPubViewMode();
+@@ -5458,6 +5552,10 @@
+             } else {
+                 h += row('Predicted rank', '—');
+                 h += sub('Needs packaging + story + recent channel data.');
++            }
++            if (s.informed_by && (s.informed_by.ab_tests || s.informed_by.checkins)) {
++                const ib = s.informed_by;
++                h += `<div class="pub-score-sub" style="color:#3ddc84;">📊 Informed by your Feedback Lab — ${ib.ab_tests} A/B test${ib.ab_tests === 1 ? '' : 's'} · ${ib.checkins} check-in${ib.checkins === 1 ? '' : 's'}</div>`;
+             }
+             if (s.generated_at) h += `<div class="pub-score-sub" style="color:#555;">Scored ${new Date(s.generated_at).toLocaleString()}</div>`;
+             return h;
+@@ -5485,7 +5583,7 @@
+                 const d = await (await fetch(`/api/videos/${targetId}/ai-score`, { method: 'POST' })).json();
+                 if (pubSelectedId !== targetId) return;
+                 if (d.error) { if (sub) sub.textContent = d.error; return; }
+-                const s = { packaging: d.packaging, story: d.story, prediction: d.prediction, thumb_ranking: d.thumb_ranking, generated_at: d.generated_at };
++                const s = { packaging: d.packaging, story: d.story, prediction: d.prediction, thumb_ranking: d.thumb_ranking, informed_by: d.informed_by, generated_at: d.generated_at };
+                 if (modalDetails && modalDetails.meta) modalDetails.meta.score = s;
+                 if (res) { res.style.display = 'flex'; res.innerHTML = _scoreRowsHTML(s); }
+                 if (sub) sub.textContent = 'Packaging · Story · Predicted rank — advisory, never blocks publish';
+@@ -5494,9 +5592,258 @@
+                 if (sub) sub.textContent = 'Scoring failed — try again';
+             } finally {
+                 if (btn) btn.disabled = false;
++            }
++        }
++
++        // ---- Feedback Lab (Feedback tab) ----
++        // A/B test tracker + morning-after Studio check-ins. The backend digests
++        // everything here into the AI Final Review prompts (informed_by line above).
++        let fbTests = [];
++
++        async function loadFeedbackLab() {
++            const list = document.getElementById('fbTestList');
++            if (!list) return;
++            if (!fbTests.length) list.innerHTML = '<div class="fb-empty">Loading…</div>';
++            try {
++                const r = await fetch('/api/feedback/lab');
++                if (r.status === 403) {
++                    list.innerHTML = '<div class="fb-empty">The Feedback Lab is in private testing — it opens to all members soon.</div>';
++                    return;
++                }
++                const d = await r.json();
++                fbTests = d.tests || [];
++                renderFeedbackLab();
++            } catch (e) {
++                list.innerHTML = '<div class="fb-empty">Could not load the Feedback Lab — refresh to retry.</div>';
+             }
+         }
+ 
++        function renderFeedbackLab() {
++            const list = document.getElementById('fbTestList');
++            if (!list) return;
++            if (!fbTests.length) {
++                list.innerHTML = '<div class="fb-empty">No tests yet. After you publish with title/thumbnail variants, hit ＋ New test — then drop the 24-hour Studio screenshot here every morning.</div>';
++                return;
++            }
++            list.innerHTML = fbTests.map(fbTestCardHTML).join('');
++        }
++
++        function fbTestCardHTML(t) {
++            const maxShare = Math.max(...t.variants.map(v => v.watch_time_share_pct || 0), 1);
++            const done = t.status === 'complete';
++            const statusPill = done
++                ? `<span class="fb-pill fb-pill-done">WINNER: ${esc(t.winner_label)}</span>`
++                : `<span class="fb-pill fb-pill-running">RUNNING</span>`;
++            return `<div class="fb-test">
++                <div class="fb-test-head">
++                    <div class="fb-test-title">${esc(t.video_title)}</div>
++                    ${statusPill}
++                    <span class="fb-test-meta">${esc(t.published || '')}${t.test_type ? ' · ' + esc(t.test_type.replace(/_/g, ' ')) : ''}</span>
++                    <span style="flex:1"></span>
++                    ${done ? `<button class="fb-mini-btn" onclick="fbReopen(${t.id})" title="Reopen test">Reopen</button>` : ''}
++                    <button class="fb-mini-btn fb-danger" onclick="fbDeleteTest(${t.id})" title="Delete test">✕</button>
++                </div>
++                <div class="fb-variants" style="grid-template-columns:repeat(${Math.max(t.variants.length, 1)},1fr);">
++                    ${t.variants.map(v => fbVariantHTML(t, v, maxShare)).join('')}
++                </div>
++                ${t.checkins.length ? `<div class="fb-checkins">${t.checkins.map(fbCheckinHTML).join('')}</div>` : ''}
++                <div class="fb-drop" id="fbDrop${t.id}"
++                     ondragover="event.preventDefault(); this.classList.add('over');"
++                     ondragleave="this.classList.remove('over');"
++                     ondrop="fbDropShot(event, ${t.id})"
++                     onclick="document.getElementById('fbFile${t.id}').click()">
++                    ⬆ Drop the 24-hour Studio screenshot (or click) — views, CTR, AVD &amp; ranking get extracted onto this card
++                    <input type="file" id="fbFile${t.id}" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="fbPickShot(this, ${t.id})">
++                </div>
++            </div>`;
++        }
++
++        function fbVariantHTML(t, v, maxShare) {
++            const isWinner = t.status === 'complete' && t.winner_label === v.label;
++            const isLeading = t.status !== 'complete' && v.leading;
++            const share = v.watch_time_share_pct;
++            const w = share == null ? 0 : Math.round(share / maxShare * 100);
++            return `<div class="fb-variant ${isWinner ? 'winner' : ''} ${isLeading ? 'leading' : ''}">
++                <div class="fb-var-head">
++                    <span class="fb-var-label">${esc(v.label)}</span>
++                    ${isWinner ? '<span class="fb-crowned">👑 WINNER</span>' : ''}
++                    ${isLeading ? '<span class="fb-leading-tag">LEADING</span>' : ''}
++                    <span style="flex:1"></span>
++                    ${t.status !== 'complete' ? `<button class="fb-mini-btn" title="Crown as winner" onclick="fbCrown(${t.id}, '${esc(v.label)}')">👑</button>` : ''}
++                </div>
++                <div class="fb-var-title">${esc(v.title || '')}</div>
++                <div class="fb-var-thumb">${esc(v.thumb_desc || '')}</div>
++                <div class="fb-share-row">
++                    <div class="fb-share-track"><div class="fb-share-fill ${isWinner || isLeading ? 'lead' : ''}" style="width:${w}%"></div></div>
++                    <button class="fb-share-pct" title="Edit watch-time share" onclick="fbEditShare(${t.id}, '${esc(v.label)}')">${share == null ? '— %' : share + '%'}</button>
++                </div>
++            </div>`;
++        }
++
++        function fbBandHTML(c) {
++            if (c.views == null || c.typical_high == null) return '';
++            const scale = Math.max(c.views, c.typical_high) * 1.15;
++            const pct = v => Math.min(100, Math.round(v / scale * 100));
++            return `<div class="fb-band-track" title="Views vs the channel's typical first-day band">
++                <div class="fb-band-range" style="left:${pct(c.typical_low || 0)}%; width:${Math.max(2, pct(c.typical_high) - pct(c.typical_low || 0))}%;"></div>
++                <div class="fb-band-marker" style="left:${pct(c.views)}%;"></div>
++            </div>`;
++        }
++
++        function fbCheckinHTML(c) {
++            const del = `<button class="fb-mini-btn fb-danger" onclick="fbDeleteCheckin(${c.id})" title="Delete check-in">✕</button>`;
++            const shot = c.screenshot_url ? `<a class="fb-shot-link" href="${esc(c.screenshot_url)}" target="_blank" title="Open the Studio screenshot">screenshot</a>` : '';
++            if (c.extract_error) {
++                return `<div class="fb-checkin fb-checkin-failed">
++                    <span class="fb-day">DAY ${c.day_index}</span>
++                    <span class="fb-ck-err" title="${esc(c.extract_error)}">⚠ extraction failed — screenshot saved</span>
++                    <button class="fb-mini-btn" onclick="fbReExtract(${c.id})">Re-extract</button>
++                    <span style="flex:1"></span>${shot}${del}
++                </div>`;
++            }
++            const hi = c.typical_high, lo = c.typical_low;
++            const col = (hi == null || c.views == null) ? '#ccc' : (c.views > hi ? '#3ddc84' : (c.views >= (lo || 0) ? '#e0b341' : '#e57373'));
++            const views = c.views == null ? '—' : c.views.toLocaleString();
++            const band = (lo != null && hi != null) ? `<span class="fb-vs">vs ${lo.toLocaleString()}–${hi.toLocaleString()} typical</span>${fbBandHTML(c)}` : '';
++            return `<div class="fb-checkin">
++                <span class="fb-day">DAY ${c.day_index}</span>
++                <span class="fb-views" style="color:${col};">${views}</span>
++                ${band}
++                ${c.ctr_pct != null ? `<span class="fb-stat">CTR <b>${c.ctr_pct}%</b></span>` : ''}
++                ${c.avd ? `<span class="fb-stat">AVD <b>${esc(c.avd)}</b></span>` : ''}
++                ${c.ranking ? `<span class="fb-rank-badge">#${esc(c.ranking)}</span>` : ''}
++                <span style="flex:1"></span>${shot}${del}
++            </div>`;
++        }
++
++        async function fbPost(url, body) {
++            const r = await fetch(url, body === undefined ? { method: 'POST' } : {
++                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
++            });
++            const d = await r.json().catch(() => ({}));
++            if (!r.ok) throw new Error(d.detail || d.error || 'Request failed');
++            return d;
++        }
++
++        async function fbCrown(tid, label) {
++            try { await fbPost(`/api/feedback/ab-tests/${tid}`, { winner_label: label }); showToast('Crowned ' + label + ' 👑'); }
++            catch (e) { showToast(e.message, true); }
++            loadFeedbackLab();
++        }
++        async function fbReopen(tid) {
++            try { await fbPost(`/api/feedback/ab-tests/${tid}`, { status: 'running', winner_label: '' }); }
++            catch (e) { showToast(e.message, true); }
++            loadFeedbackLab();
++        }
++        async function fbDeleteTest(tid) {
++            if (!confirm('Delete this test and its check-ins?')) return;
++            try {
++                const r = await fetch(`/api/feedback/ab-tests/${tid}`, { method: 'DELETE' });
++                if (!r.ok) throw new Error('Delete failed');
++            } catch (e) { showToast(e.message, true); }
++            loadFeedbackLab();
++        }
++        async function fbEditShare(tid, label) {
++            const t = fbTests.find(x => x.id === tid);
++            const v = t && t.variants.find(x => x.label === label);
++            if (!v) return;
++            const raw = prompt(`Watch-time share % for variant ${label} (from Studio's test results):`,
++                               v.watch_time_share_pct == null ? '' : v.watch_time_share_pct);
++            if (raw === null) return;
++            const num = parseFloat(raw);
++            v.watch_time_share_pct = isNaN(num) ? null : num;
++            try { await fbPost(`/api/feedback/ab-tests/${tid}`, { variants: t.variants }); }
++            catch (e) { showToast(e.message, true); }
++            loadFeedbackLab();
++        }
++        async function fbReExtract(cid) {
++            showToast('Re-reading screenshot…');
++            try { await fbPost(`/api/feedback/checkins/${cid}/extract`); showToast('Check-in updated ✓'); }
++            catch (e) { showToast(e.message, true); }
++            loadFeedbackLab();
++        }
++        async function fbDeleteCheckin(cid) {
++            if (!confirm('Delete this check-in?')) return;
++            try {
++                const r = await fetch(`/api/feedback/checkins/${cid}`, { method: 'DELETE' });
++                if (!r.ok) throw new Error('Delete failed');
++            } catch (e) { showToast(e.message, true); }
++            loadFeedbackLab();
++        }
++
++        function fbDropShot(ev, tid) {
++            ev.preventDefault();
++            const el = document.getElementById('fbDrop' + tid);
++            if (el) el.classList.remove('over');
++            const f = ev.dataTransfer.files && ev.dataTransfer.files[0];
++            if (f) fbUploadCheckin(tid, f);
++        }
++        function fbPickShot(input, tid) {
++            const f = input.files && input.files[0];
++            input.value = '';
++            if (f) fbUploadCheckin(tid, f);
++        }
++        async function fbUploadCheckin(tid, file) {
++            const drop = document.getElementById('fbDrop' + tid);
++            if (drop) { drop.classList.add('busy'); drop.innerHTML = '⏳ Reading screenshot — views, CTR, AVD, ranking…'; }
++            const fd = new FormData();
++            fd.append('file', file);
++            try {
++                const r = await fetch(`/api/feedback/ab-tests/${tid}/checkin`, { method: 'POST', body: fd });
++                const d = await r.json();
++                if (!r.ok) showToast(d.detail || d.error || 'Check-in failed', true);
++                else if (d.checkin && d.checkin.extract_error) showToast('Screenshot saved, but extraction failed — hit Re-extract', true);
++                else showToast('Check-in added ✓');
++            } catch (e) { showToast('Network error', true); }
++            loadFeedbackLab();
++        }
++
++        // ── New-test form ──
++        function fbToggleNewForm(show) {
++            const f = document.getElementById('fbNewForm');
++            if (!f) return;
++            const on = show === undefined ? f.style.display === 'none' : show;
++            f.style.display = on ? 'block' : 'none';
++            if (on) {
++                const wrap = document.getElementById('fbNewVariants');
++                if (wrap && !wrap.children.length) { fbAddVariantRow(); fbAddVariantRow(); }
++                const t = document.getElementById('fbNewTitle');
++                if (t) t.focus();
++            }
++        }
++        function fbAddVariantRow() {
++            const wrap = document.getElementById('fbNewVariants');
++            if (!wrap || wrap.children.length >= 4) return;
++            const label = 'ABCD'[wrap.children.length];
++            const row = document.createElement('div');
++            row.className = 'fb-form-row fb-variant-row';
++            row.innerHTML = `<span class="fb-var-label">${label}</span>
++                <input type="text" class="fbv-title" placeholder="Title variant ${label}" maxlength="200">
++                <input type="text" class="fbv-desc" placeholder="Thumb concept (short)" maxlength="300">`;
++            wrap.appendChild(row);
++        }
++        async function fbCreateTest() {
++            const title = (document.getElementById('fbNewTitle').value || '').trim();
++            if (!title) { showToast('Give the test the video title', true); return; }
++            const variants = [...document.querySelectorAll('#fbNewVariants .fb-variant-row')].map((row, i) => ({
++                label: 'ABCD'[i],
++                title: row.querySelector('.fbv-title').value.trim(),
++                thumb_desc: row.querySelector('.fbv-desc').value.trim(),
++            })).filter(v => v.title || v.thumb_desc);
++            try {
++                await fbPost('/api/feedback/ab-tests', {
++                    video_title: title,
++                    published: document.getElementById('fbNewDate').value || '',
++                    variants,
++                });
++                showToast('Test added ✓');
++                fbToggleNewForm(false);
++                document.getElementById('fbNewTitle').value = '';
++                document.getElementById('fbNewVariants').innerHTML = '';
++            } catch (e) { showToast(e.message, true); }
++            loadFeedbackLab();
++        }
++
+         async function savePublishDescription() {
+             if (!pubSelectedId) return;
+             const ta = document.getElementById('pubDescription');
+@@ -8226,6 +8573,10 @@
+                 if (data.authenticated) applyProfilePic(data.profile_pic || '');
+                 const fac = document.getElementById('factoryMenuItem');
+                 if (fac) fac.style.display = data.is_admin ? '' : 'none';
++                // Feedback Lab soft-launch: server says who sees the tab
++                // (admins now; everyone once FEEDBACK_LAB_OPEN=1).
++                const fbt = document.getElementById('feedbackTabBtn');
++                if (fbt) fbt.style.display = data.feedback_lab_enabled ? '' : 'none';
+             } catch (e) { /* silent */ }
+         }
+         function openFactory() {
+--- a/usage_budget.py
++++ b/usage_budget.py
+@@ -43,6 +43,7 @@
+     "image_pro":     20,   # Gemini 3 Pro Image (pixel-face / hi-res)
+     "tts_voiceover": 30,   # ElevenLabs SAY-doc narration (per generation)
+     "claude_review": 8,    # Claude Sonnet AI Final Review (per call)
++    "checkin_extract": 2,  # Gemini Flash vision read of a Studio screenshot
+ }
+ 
+ 
+--- a/deploy.sh
++++ b/deploy.sh
+@@ -8,7 +8,7 @@
+ 
+ MSG="${1:-quick: $(date +%H:%M)}"
+ 
+-scp app.py root@148.230.108.170:/opt/idea_dashboard/app.py
++scp app.py usage_budget.py root@148.230.108.170:/opt/idea_dashboard/
+ # NOTE: templates/static are NOT bind-mounted — they're baked into the image at
+ # build time. A plain `docker restart` will NOT pick up template/static changes;
+ # the rebuild.sh call below does `docker compose up --build`, which is required.
+@@ -22,4 +22,12 @@
+ 
+ ssh root@148.230.108.170 "cd /opt/idea_dashboard && ./rebuild.sh \"$MSG\""
+ 
++# data/*.json (Feedback Lab imports) live in the root_dashboard_data volume,
++# which is mounted OVER /app/data and shadows the image's baked copy — so sync
++# them into the volume AFTER the rebuild or the container never sees new drops.
++if [ -d data ]; then
++  scp -r data root@148.230.108.170:/opt/idea_dashboard/
++  ssh root@148.230.108.170 'docker cp /opt/idea_dashboard/data/. root-idea-dashboard-1:/app/data/'
++fi
++
+ echo "deployed @ $(date +%H:%M:%S)"

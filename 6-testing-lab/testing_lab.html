@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🧪 Testing Lab — CreatorGrowth</title>
+<link rel="icon" type="image/png" href="/static/favicon.png">
+<style>
+  /* Same palette as factory.html so the admin pages feel like one suite. */
+  :root{
+    --bg:#0d1016; --panel:#141a24; --panel2:#1a2030; --line:#2a3140; --line2:#3a4458;
+    --ink:#e7ecf3; --muted:#8b95a7; --dim:#56607a; --gold:#f5b942;
+    --good:#52c46e; --bad:#e06a6a; --mix:#e0b76a; --teal:#7fd4a8;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%}
+  body{background:var(--bg);color:var(--ink);
+    font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  a{color:var(--gold);text-decoration:none}
+  button{font:inherit;cursor:pointer}
+
+  .topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:14px;padding:0 18px;
+    border-bottom:1px solid var(--line);background:linear-gradient(180deg,#19202c,#0e1117);height:56px}
+  .topbar h1{font-size:18px;margin:0;letter-spacing:.4px;white-space:nowrap}
+  .topbar .sub{color:var(--dim);font-size:12px}
+  .topbar .spacer{flex:1}
+  .pill{background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+    padding:5px 11px;font-size:12.5px;color:var(--muted);white-space:nowrap}
+  .pill b{color:var(--ink)}
+  .back{color:var(--muted);border:1px solid var(--line);padding:7px 13px;border-radius:8px;
+    font-size:12.5px;white-space:nowrap}
+  .back:hover{color:var(--ink);border-color:var(--gold)}
+
+  .wrap{max-width:none;padding:18px}
+
+  /* ── New-test composer ── */
+  .composer{display:flex;gap:10px;align-items:flex-start;margin-bottom:20px;max-width:880px}
+  .composer textarea{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    color:var(--ink);padding:10px 12px;min-height:44px;resize:vertical;font:inherit}
+  .composer textarea:focus{outline:none;border-color:var(--teal)}
+  .btn{background:var(--panel2);border:1px solid var(--line2);border-radius:9px;color:var(--ink);
+    padding:10px 16px;font-weight:600;transition:.12s;white-space:nowrap}
+  .btn:hover{border-color:var(--teal);color:var(--teal)}
+  .btn.primary{border-color:#2a5a40;background:#12281c;color:var(--teal)}
+  .btn.primary:hover{border-color:var(--teal)}
+
+  .empty{color:var(--dim);font-style:italic;padding:60px 0;text-align:center;font-size:14px}
+
+  /* ── Test row: prompt anchor + runs rail ── */
+  .test{display:flex;gap:14px;margin-bottom:18px;align-items:stretch}
+  .prompt-card{flex:0 0 300px;background:var(--panel);border:1px solid var(--line);
+    border-left:3px solid var(--teal);border-radius:12px;padding:12px 13px;
+    display:flex;flex-direction:column;gap:8px;position:relative}
+  .prompt-card .label{font-size:9.5px;font-weight:800;letter-spacing:1.2px;color:var(--dim);
+    text-transform:uppercase;display:flex;justify-content:space-between;align-items:center}
+  .prompt-card .label .tools{display:flex;gap:4px}
+  .iconbtn{background:none;border:1px solid var(--line);border-radius:6px;color:var(--muted);
+    width:24px;height:24px;font-size:12px;line-height:1;padding:0;transition:.12s}
+  .iconbtn:hover{color:var(--ink);border-color:var(--line2)}
+  .iconbtn.danger:hover{color:var(--bad);border-color:var(--bad)}
+  .prompt-text{white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.5;
+    color:var(--ink);max-height:150px;overflow:hidden;cursor:pointer;position:relative}
+  .prompt-text.open{max-height:none}
+  .prompt-text.clamped:not(.open)::after{content:"";position:absolute;left:0;right:0;bottom:0;height:34px;
+    background:linear-gradient(transparent,var(--panel))}
+  .prompt-card .meta{color:var(--dim);font-size:11px;margin-top:auto}
+  .prompt-card textarea{background:var(--panel2);border:1px solid var(--line2);border-radius:8px;
+    color:var(--ink);padding:8px;min-height:110px;resize:vertical;font:inherit;font-size:12.5px}
+  .prompt-card .editrow{display:flex;gap:6px}
+
+  .rail{flex:1;display:flex;gap:12px;overflow-x:auto;padding-bottom:6px;scrollbar-width:thin}
+
+  /* ── Run card (one model attempt) ── */
+  .run{flex:0 0 250px;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:11px 12px;display:flex;flex-direction:column;gap:8px;position:relative;transition:border-color .12s}
+  .run.active{border-color:var(--teal);box-shadow:0 0 0 1px var(--teal) inset}
+  .run.dragover{border-color:var(--gold);background:#181f14}
+  .run .head{display:flex;align-items:center;gap:6px}
+  .run input.model{flex:1;background:none;border:none;border-bottom:1px dashed transparent;
+    color:var(--ink);font-weight:700;font-size:13.5px;padding:2px 0;min-width:0}
+  .run input.model:hover{border-bottom-color:var(--line2)}
+  .run input.model:focus{outline:none;border-bottom-color:var(--teal)}
+  .run input.model::placeholder{color:var(--dim);font-weight:400}
+  .run input.date{background:none;border:none;color:var(--muted);font:inherit;font-size:11.5px;
+    padding:0;width:108px;color-scheme:dark}
+  .run input.date:focus{outline:none;color:var(--ink)}
+
+  .verdict{align-self:flex-start;border-radius:999px;border:1px solid var(--line2);
+    background:var(--panel2);color:var(--muted);font-size:11.5px;font-weight:700;
+    padding:3px 11px;letter-spacing:.3px;transition:.12s}
+  .verdict[data-v="pending"]{color:var(--muted)}
+  .verdict[data-v="win"]{color:#0d1016;background:var(--gold);border-color:var(--gold)}
+  .verdict[data-v="good"]{color:var(--good);border-color:#2a5a40;background:#12281c}
+  .verdict[data-v="mixed"]{color:var(--mix);border-color:#5a4a2a;background:#241d10}
+  .verdict[data-v="fail"]{color:var(--bad);border-color:#5a2a2a;background:#241212}
+
+  .shots{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+  .shot{position:relative;aspect-ratio:16/10;border-radius:7px;overflow:hidden;
+    border:1px solid var(--line);cursor:zoom-in;background:#0a0d12}
+  .shot img{width:100%;height:100%;object-fit:cover;display:block}
+  .shot .rm{position:absolute;top:3px;right:3px;width:18px;height:18px;border-radius:5px;
+    background:rgba(10,13,18,.85);border:1px solid var(--line2);color:var(--muted);
+    font-size:11px;line-height:1;padding:0;display:none}
+  .shot:hover .rm{display:block}
+  .shot .rm:hover{color:var(--bad);border-color:var(--bad)}
+  .addshot{aspect-ratio:16/10;border:1px dashed var(--line2);border-radius:7px;background:none;
+    color:var(--dim);font-size:18px;transition:.12s}
+  .addshot:hover{color:var(--teal);border-color:var(--teal)}
+
+  .run textarea.notes{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+    color:var(--muted);padding:6px 8px;font:inherit;font-size:11.5px;resize:vertical;
+    min-height:34px}
+  .run textarea.notes:focus{outline:none;border-color:var(--line2);color:var(--ink)}
+  .run .hint{color:var(--dim);font-size:10px;text-align:center}
+
+  .addrun{flex:0 0 130px;border:1px dashed var(--line2);border-radius:12px;background:none;
+    color:var(--dim);font-size:13px;font-weight:600;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:6px;min-height:170px;transition:.12s}
+  .addrun:hover{color:var(--teal);border-color:var(--teal)}
+  .addrun .plus{font-size:24px;line-height:1}
+
+  /* ── Lightbox: side-by-side compare across a test's runs ── */
+  .lightbox{position:fixed;inset:0;background:rgba(5,7,10,.93);z-index:100;display:none;
+    flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:30px}
+  .lightbox.open{display:flex}
+  .lightbox img{max-width:90vw;max-height:74vh;border-radius:10px;border:1px solid var(--line2);
+    background:#0a0d12}
+  .lightbox .cap{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:13px}
+  .lightbox .cap b{color:var(--ink);font-size:15px}
+  .lightbox .nav{position:fixed;top:50%;transform:translateY(-50%);width:46px;height:66px;
+    background:var(--panel2);border:1px solid var(--line2);border-radius:10px;color:var(--muted);
+    font-size:22px}
+  .lightbox .nav:hover{color:var(--ink);border-color:var(--gold)}
+  .lightbox .nav.prev{left:18px}
+  .lightbox .nav.next{right:18px}
+  .lightbox .close{position:fixed;top:16px;right:18px;width:38px;height:38px;border-radius:9px;
+    background:var(--panel2);border:1px solid var(--line2);color:var(--muted);font-size:17px}
+  .lightbox .close:hover{color:var(--bad);border-color:var(--bad)}
+  .lightbox .counter{position:fixed;top:24px;left:50%;transform:translateX(-50%);
+    color:var(--dim);font-size:12px}
+
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(80px);
+    background:var(--panel2);border:1px solid var(--line2);border-radius:10px;color:var(--ink);
+    padding:10px 18px;font-size:13px;transition:transform .2s;z-index:200}
+  .toast.show{transform:translateX(-50%) translateY(0)}
+  .toast.err{border-color:var(--bad);color:var(--bad)}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>🧪 Testing Lab</h1>
+  <span class="sub">private model-comparison board</span>
+  <span class="pill" id="countPill"><b>0</b> tests</span>
+  <div class="spacer"></div>
+  <a class="back" href="/">← Dashboard</a>
+</div>
+
+<div class="wrap">
+  <div class="composer">
+    <textarea id="newPrompt" placeholder="Paste the exact prompt for a new test… (⌘↵ to add)"></textarea>
+    <button class="btn primary" onclick="createTest()">Add test</button>
+  </div>
+  <div id="board"></div>
+</div>
+
+<div class="lightbox" id="lightbox" onclick="if(event.target===this)closeLightbox()">
+  <span class="counter" id="lbCounter"></span>
+  <button class="nav prev" onclick="stepLightbox(-1)">‹</button>
+  <img id="lbImg" alt="">
+  <div class="cap" id="lbCap"></div>
+  <button class="nav next" onclick="stepLightbox(1)">›</button>
+  <button class="close" onclick="closeLightbox()">✕</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let board = [];            // [{id, prompt, created_at, runs:[…]}]
+let activeRunId = null;    // run that receives pasted screenshots
+let lb = {shots: [], idx: 0};
+
+const VERDICTS = ['pending', 'win', 'good', 'mixed', 'fail'];
+const VLABEL = {pending:'⏳ pending', win:'👑 win', good:'👍 good', mixed:'😐 mixed', fail:'👎 fail'};
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function toast(msg, err = false) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast show' + (err ? ' err' : '');
+    clearTimeout(t._h);
+    t._h = setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+async function api(method, url, body) {
+    const opts = {method, headers: {}};
+    if (body instanceof FormData) opts.body = body;
+    else if (body !== undefined) {
+        opts.headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(body);
+    }
+    const r = await fetch(url, opts);
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `${method} ${url} → ${r.status}`);
+    return data;
+}
+
+// ── Board ─────────────────────────────────────────────────────────────
+
+async function loadBoard() {
+    try {
+        board = (await api('GET', '/api/lab/board')).tests;
+        render();
+    } catch (e) { toast(e.message, true); }
+}
+
+function render(focusRunId) {
+    const el = document.getElementById('board');
+    document.querySelector('#countPill b').textContent = board.length;
+    if (!board.length) {
+        el.innerHTML = '<div class="empty">No tests yet — paste a prompt above to start comparing models.</div>';
+        return;
+    }
+    el.innerHTML = board.map(renderTest).join('');
+    // Re-mark the paste target after re-render
+    if (activeRunId) {
+        const card = document.querySelector(`.run[data-run="${activeRunId}"]`);
+        if (card) card.classList.add('active'); else activeRunId = null;
+    }
+    if (focusRunId) {
+        const inp = document.querySelector(`.run[data-run="${focusRunId}"] input.model`);
+        if (inp) { inp.focus(); inp.scrollIntoView({block:'nearest', inline:'nearest'}); }
+    }
+}
+
+function renderTest(t) {
+    return `
+    <div class="test" data-test="${t.id}">
+      <div class="prompt-card">
+        <div class="label"><span>Prompt</span>
+          <span class="tools">
+            <button class="iconbtn" title="Copy prompt" onclick="copyPrompt(${t.id})">⧉</button>
+            <button class="iconbtn" title="Edit prompt" onclick="editPrompt(${t.id})">✎</button>
+            <button class="iconbtn danger" title="Delete test" onclick="deleteTest(${t.id})">✕</button>
+          </span>
+        </div>
+        <div class="prompt-text" id="ptext-${t.id}" onclick="this.classList.toggle('open')">${esc(t.prompt)}</div>
+        <div class="meta">${t.runs.length} run${t.runs.length === 1 ? '' : 's'} · added ${esc((t.created_at || '').slice(0, 10))}</div>
+      </div>
+      <div class="rail">
+        ${t.runs.map(r => renderRun(r)).join('')}
+        <button class="addrun" onclick="addRun(${t.id})" title="Add a model run to this test">
+          <span class="plus">+</span><span>Run</span>
+        </button>
+      </div>
+    </div>`;
+}
+
+function renderRun(r) {
+    return `
+    <div class="run" data-run="${r.id}" onclick="setActiveRun(${r.id})"
+         ondragover="event.preventDefault();this.classList.add('dragover')"
+         ondragleave="this.classList.remove('dragover')"
+         ondrop="dropShots(event, ${r.id})">
+      <div class="head">
+        <input class="model" placeholder="Model name…" value="${esc(r.model_name)}"
+               onchange="saveRun(${r.id}, {model_name: this.value})"
+               onkeydown="if(event.key==='Enter')this.blur()">
+        <button class="iconbtn danger" title="Delete run" onclick="event.stopPropagation();deleteRun(${r.id})">✕</button>
+      </div>
+      <input class="date" type="date" value="${esc(r.run_date)}"
+             onchange="saveRun(${r.id}, {run_date: this.value})">
+      <button class="verdict" data-v="${esc(r.verdict)}" title="Click to cycle verdict"
+              onclick="cycleVerdict(${r.id})">${VLABEL[r.verdict] || esc(r.verdict)}</button>
+      <div class="shots">
+        ${r.screenshots.map((u, i) => `
+          <div class="shot" onclick="event.stopPropagation();openLightbox(${r.test_id}, '${esc(u)}')">
+            <img src="${esc(u)}" loading="lazy" alt="">
+            <button class="rm" title="Remove screenshot"
+                    onclick="event.stopPropagation();removeShot(${r.id}, '${esc(u)}')">✕</button>
+          </div>`).join('')}
+        <button class="addshot" title="Add screenshots (or paste/drop on this card)"
+                onclick="event.stopPropagation();pickShots(${r.id})">＋</button>
+      </div>
+      <textarea class="notes" placeholder="Notes…"
+                onchange="saveRun(${r.id}, {notes: this.value})">${esc(r.notes)}</textarea>
+      <div class="hint">click card, then ⌘V pastes screenshots here</div>
+    </div>`;
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────
+
+async function createTest() {
+    const ta = document.getElementById('newPrompt');
+    const prompt = ta.value.trim();
+    if (!prompt) { toast('Paste a prompt first', true); return; }
+    try {
+        const {test} = await api('POST', '/api/lab/tests', {prompt});
+        board.unshift(test);
+        ta.value = '';
+        render();
+        toast('Test added — click “+ Run” to log the first model');
+    } catch (e) { toast(e.message, true); }
+}
+
+function copyPrompt(testId) {
+    const t = board.find(x => x.id === testId);
+    navigator.clipboard.writeText(t.prompt).then(
+        () => toast('Prompt copied — exact text, ready to paste into the next model'),
+        () => toast('Copy failed', true));
+}
+
+function editPrompt(testId) {
+    const t = board.find(x => x.id === testId);
+    const card = document.querySelector(`.test[data-test="${testId}"] .prompt-card`);
+    card.innerHTML = `
+      <div class="label"><span>Edit prompt</span></div>
+      <textarea id="pedit-${testId}">${esc(t.prompt)}</textarea>
+      <div class="editrow">
+        <button class="btn primary" onclick="savePrompt(${testId})">Save</button>
+        <button class="btn" onclick="render()">Cancel</button>
+      </div>`;
+    document.getElementById(`pedit-${testId}`).focus();
+}
+
+async function savePrompt(testId) {
+    const val = document.getElementById(`pedit-${testId}`).value.trim();
+    if (!val) { toast('Prompt can’t be empty', true); return; }
+    try {
+        await api('PATCH', `/api/lab/tests/${testId}`, {prompt: val});
+        board.find(x => x.id === testId).prompt = val;
+        render();
+    } catch (e) { toast(e.message, true); }
+}
+
+async function deleteTest(testId) {
+    const t = board.find(x => x.id === testId);
+    if (!confirm(`Delete this test and its ${t.runs.length} run(s)? Screenshots are removed too.`)) return;
+    try {
+        await api('DELETE', `/api/lab/tests/${testId}`);
+        board = board.filter(x => x.id !== testId);
+        render();
+    } catch (e) { toast(e.message, true); }
+}
+
+// ── Runs ──────────────────────────────────────────────────────────────
+
+async function addRun(testId) {
+    try {
+        const {run} = await api('POST', `/api/lab/tests/${testId}/runs`, {});
+        const t = board.find(x => x.id === testId);
+        t.runs.push(run);
+        activeRunId = run.id;
+        render(run.id);   // new column appears with the model input focused
+    } catch (e) { toast(e.message, true); }
+}
+
+async function saveRun(runId, fields) {
+    try {
+        const {run} = await api('PATCH', `/api/lab/runs/${runId}`, fields);
+        replaceRun(run);
+    } catch (e) { toast(e.message, true); loadBoard(); }
+}
+
+function replaceRun(run, rerender = true) {
+    const t = board.find(x => x.id === run.test_id);
+    const i = t.runs.findIndex(r => r.id === run.id);
+    if (i >= 0) t.runs[i] = run;
+    if (rerender) render();
+}
+
+async function cycleVerdict(runId) {
+    const run = board.flatMap(t => t.runs).find(r => r.id === runId);
+    const next = VERDICTS[(VERDICTS.indexOf(run.verdict) + 1) % VERDICTS.length];
+    await saveRun(runId, {verdict: next});
+}
+
+async function deleteRun(runId) {
+    if (!confirm('Delete this run (and its screenshots)?')) return;
+    try {
+        await api('DELETE', `/api/lab/runs/${runId}`);
+        for (const t of board) t.runs = t.runs.filter(r => r.id !== runId);
+        if (activeRunId === runId) activeRunId = null;
+        render();
+    } catch (e) { toast(e.message, true); }
+}
+
+function setActiveRun(runId) {
+    activeRunId = runId;
+    document.querySelectorAll('.run.active').forEach(el => el.classList.remove('active'));
+    const card = document.querySelector(`.run[data-run="${runId}"]`);
+    if (card) card.classList.add('active');
+}
+
+// ── Screenshots: file picker, drag-drop, paste ────────────────────────
+
+async function uploadShots(runId, files) {
+    const imgs = [...files].filter(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(f.name));
+    if (!imgs.length) { toast('No images in that drop/paste', true); return; }
+    const fd = new FormData();
+    // Pasted blobs arrive named "image.png"-less; give them a real name.
+    imgs.forEach(f => fd.append('file', f, f.name || `paste-${Date.now()}.png`));
+    try {
+        const {screenshots} = await api('POST', `/api/lab/runs/${runId}/screenshots`, fd);
+        const run = board.flatMap(t => t.runs).find(r => r.id === runId);
+        run.screenshots = screenshots;
+        render();
+        toast(`${imgs.length} screenshot${imgs.length > 1 ? 's' : ''} added`);
+    } catch (e) { toast(e.message, true); }
+}
+
+function pickShots(runId) {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = '.png,.jpg,.jpeg,.webp,.gif';
+    inp.multiple = true;
+    inp.onchange = () => uploadShots(runId, inp.files);
+    inp.click();
+}
+
+function dropShots(ev, runId) {
+    ev.preventDefault();
+    ev.currentTarget.classList.remove('dragover');
+    uploadShots(runId, ev.dataTransfer.files);
+}
+
+document.addEventListener('paste', ev => {
+    if (!activeRunId) return;
+    if (['TEXTAREA', 'INPUT'].includes(document.activeElement?.tagName)) return;
+    const files = [...(ev.clipboardData?.files || [])];
+    if (files.length) { ev.preventDefault(); uploadShots(activeRunId, files); }
+});
+
+async function removeShot(runId, url) {
+    try {
+        const {screenshots} = await api('DELETE', `/api/lab/runs/${runId}/screenshots`, {url});
+        const run = board.flatMap(t => t.runs).find(r => r.id === runId);
+        run.screenshots = screenshots;
+        render();
+    } catch (e) { toast(e.message, true); }
+}
+
+// ── Lightbox: ←/→ steps through every shot across the test's runs ─────
+
+function openLightbox(testId, url) {
+    const t = board.find(x => x.id === testId);
+    lb.shots = t.runs.flatMap(r => r.screenshots.map(u => ({
+        url: u, model: r.model_name || 'unnamed model', date: r.run_date, verdict: r.verdict,
+    })));
+    lb.idx = Math.max(0, lb.shots.findIndex(s => s.url === url));
+    showLightbox();
+}
+
+function showLightbox() {
+    const s = lb.shots[lb.idx];
+    if (!s) return;
+    document.getElementById('lbImg').src = s.url;
+    document.getElementById('lbCap').innerHTML =
+        `<b>${esc(s.model)}</b><span>${esc(s.date)}</span>` +
+        `<span class="verdict" data-v="${esc(s.verdict)}">${VLABEL[s.verdict] || esc(s.verdict)}</span>`;
+    document.getElementById('lbCounter').textContent = `${lb.idx + 1} / ${lb.shots.length}`;
+    document.getElementById('lightbox').classList.add('open');
+}
+
+function stepLightbox(d) {
+    lb.idx = (lb.idx + d + lb.shots.length) % lb.shots.length;
+    showLightbox();
+}
+
+function closeLightbox() {
+    document.getElementById('lightbox').classList.remove('open');
+}
+
+document.addEventListener('keydown', ev => {
+    const open = document.getElementById('lightbox').classList.contains('open');
+    if (open) {
+        if (ev.key === 'Escape') closeLightbox();
+        if (ev.key === 'ArrowLeft') stepLightbox(-1);
+        if (ev.key === 'ArrowRight') stepLightbox(1);
+    }
+    if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)
+        && document.activeElement === document.getElementById('newPrompt')) {
+        createTest();
+    }
+});
+
+// Long prompts get a fade + expand-on-click; mark which ones actually clamp.
+const ro = new ResizeObserver(entries => {
+    for (const e of entries)
+        e.target.classList.toggle('clamped', e.target.scrollHeight > e.target.clientHeight + 4);
+});
+new MutationObserver(() =>
+    document.querySelectorAll('.prompt-text').forEach(el => ro.observe(el))
+).observe(document.getElementById('board'), {childList: true});
+
+loadBoard();
+</script>
+</body>
+</html>

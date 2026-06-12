@@ -1,0 +1,13 @@
+{
+  "name": "claude-mission-control",
+  "version": "1.0.0",
+  "description": "Mission control dashboard for Claude Code — watches ~/.claude/projects JSONL transcripts and shows your agent fleet live.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

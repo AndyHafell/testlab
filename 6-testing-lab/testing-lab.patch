@@ -1,0 +1,432 @@
+--- a/app.py
++++ b/app.py
+@@ -617,6 +617,27 @@
+         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+         updated_at TEXT
+     )""")
++    # ── Testing Lab (admin-only model comparison board) ──
++    # One lab_tests row per experiment, anchored by the exact prompt. Each
++    # lab_runs row is one model attempt at that prompt (a column on the board):
++    # Fable 5 today, whatever ships next month, side by side. `screenshots` is
++    # a JSON array of /static/uploads/lab/<run_id>/… URLs (same idiom as
++    # abc_choices). No user_id — the identity_email admin gate IS the scope.
++    conn.execute("""CREATE TABLE IF NOT EXISTS lab_tests (
++        id INTEGER PRIMARY KEY AUTOINCREMENT,
++        prompt TEXT NOT NULL,
++        created_at TEXT DEFAULT CURRENT_TIMESTAMP
++    )""")
++    conn.execute("""CREATE TABLE IF NOT EXISTS lab_runs (
++        id INTEGER PRIMARY KEY AUTOINCREMENT,
++        test_id INTEGER NOT NULL REFERENCES lab_tests(id),
++        model_name TEXT DEFAULT '',
++        run_date TEXT DEFAULT (date('now')),
++        verdict TEXT DEFAULT 'pending',
++        notes TEXT DEFAULT '',
++        screenshots TEXT DEFAULT '[]',
++        created_at TEXT DEFAULT CURRENT_TIMESTAMP
++    )""")
+     # ── Feedback Lab (A/B packaging tests + post-publish Studio check-ins) ──
+     # One ab_tests row per tracked published video; variants is a JSON list of
+     # {label, title, thumb_desc, watch_time_share_pct, leading}. ab_checkins
+@@ -1015,6 +1036,48 @@
+     return bool(email) and email.strip().lower() in ADMIN_EMAILS
+ 
+ 
++def _testing_lab_admin() -> bool:
++    """Testing Lab gate: strictly the session's identity_email — the real
++    human who logged in. session['email'] is deliberately NOT consulted: it
++    gets swapped during admin impersonation and team-workspace switches, so a
++    plain-email gate would leak the Lab into (or out of) swapped sessions.
++    identity_email always stays the actual person."""
++    email = session.get("identity_email") or ""
++    if not email:
++        # Legacy cookies minted before identity_email existed carry only
++        # user_id/email (and _heal_session never runs for them — user_id is
++        # present). Recover the real human from the users row, NOT from the
++        # session email string, and heal the session for next time.
++        uid = session.get("identity_user_id") or session.get("user_id")
++        if uid is None:
++            return False
++        conn = get_db()
++        try:
++            row = conn.execute(
++                "SELECT email FROM users WHERE id = ?", (uid,)
++            ).fetchone()
++        finally:
++            conn.close()
++        email = (row["email"] if row else "") or ""
++        if email:
++            session["identity_email"] = email
++    return _is_admin_email(email)
++
++
++def testing_lab_required(f):
++    """404 for non-admin API calls (the Lab must be invisible, not
++    'forbidden'); redirect home off the page route, like /factory.
++    Unauthenticated requests never get this far — require_auth 401s them."""
++    @wraps(f)
++    def decorated(*args, **kwargs):
++        if not _testing_lab_admin():
++            if request.path.startswith("/api/"):
++                return jsonify({"error": "Not found"}), 404
++            return redirect("/")
++        return f(*args, **kwargs)
++    return decorated
++
++
+ # The bundled /static/andy_avatar.png is Andy's face — it is the right *default*
+ # avatar only for Andy himself. Every other member without a custom profile pic
+ # gets a neutral initials disc (generated client-side from their email) so they
+@@ -1130,6 +1193,9 @@
+         "blotato_platforms": _blotato_connected_platforms(),
+         "can_import_airtable_keywords": _is_admin_email(identity_email),
+         "can_use_pixel_face_thumbs": _is_admin_email(identity_email),
++        # Reveals the 🧪 Testing Lab menu item; the real boundary is the
++        # identity_email check on every /testing-lab and /api/lab/* route.
++        "can_use_testing_lab": _is_admin_email(identity_email),
+         # Feedback Lab soft-launch: admin-only until FEEDBACK_LAB_OPEN=1.
+         "feedback_lab_enabled": _feedback_lab_enabled_for_session(),
+     })
+@@ -4979,8 +5045,275 @@
+     if inserted:
+         conn.commit()
+     return inserted
++
++
++# ── Testing Lab: admin-only AI model comparison board ─────────────────────
++# One lab_tests row per experiment (anchored by the exact prompt); each
++# lab_runs row is one model attempt — a column on the board. Every route is
++# behind testing_lab_required (identity_email gate, 404 to everyone else),
++# so the Lab simply does not exist for non-admins.
++
++LAB_VERDICTS = ("pending", "win", "good", "mixed", "fail")
++_LAB_SHOT_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
++
++
++def _lab_run_dict(row):
++    d = dict(row)
++    try:
++        d["screenshots"] = json.loads(d.get("screenshots") or "[]")
++    except (json.JSONDecodeError, TypeError):
++        d["screenshots"] = []
++    return d
+ 
+ 
++def _lab_shot_dir(run_id: int) -> Path:
++    return UPLOAD_DIR / "lab" / str(run_id)
++
++
++def _lab_remove_shot_dir(run_id: int):
++    """Best-effort cleanup of a run's screenshot folder on run/test delete."""
++    d = _lab_shot_dir(run_id)
++    try:
++        if d.is_dir():
++            for f in d.iterdir():
++                f.unlink()
++            d.rmdir()
++    except OSError:
++        app.logger.warning("lab: could not fully remove %s", d)
++
++
++def _lab_run_fields(data, *, partial):
++    """Validate/normalize a run payload. Returns (fields_dict, error)."""
++    out = {}
++    if "model_name" in data or not partial:
++        out["model_name"] = str(data.get("model_name") or "").strip()[:120]
++    if "verdict" in data or not partial:
++        verdict = str(data.get("verdict") or "pending").strip().lower()
++        if verdict not in LAB_VERDICTS:
++            return None, f"verdict must be one of {', '.join(LAB_VERDICTS)}"
++        out["verdict"] = verdict
++    if "notes" in data:
++        out["notes"] = str(data.get("notes") or "").strip()[:4000]
++    if "run_date" in data:
++        out["run_date"] = str(data.get("run_date") or "").strip()[:32]
++    return out, None
++
++
++@app.route("/testing-lab")
++@testing_lab_required
++def testing_lab_page():
++    return render_template("testing_lab.html")
++
++
++@app.route("/api/lab/board", methods=["GET"])
++@testing_lab_required
++def lab_board():
++    """The whole board in one shot: tests newest-first, runs oldest-first
++    (a new run lands as the rightmost column)."""
++    conn = get_db()
++    try:
++        tests = [dict(r) for r in conn.execute(
++            "SELECT * FROM lab_tests ORDER BY id DESC").fetchall()]
++        for t in tests:
++            t["runs"] = [_lab_run_dict(r) for r in conn.execute(
++                "SELECT * FROM lab_runs WHERE test_id = ? ORDER BY id ASC",
++                (t["id"],)).fetchall()]
++    finally:
++        conn.close()
++    return jsonify({"tests": tests})
++
++
++@app.route("/api/lab/tests", methods=["POST"])
++@testing_lab_required
++def lab_create_test():
++    data = request.get_json(force=True, silent=True) or {}
++    prompt = str(data.get("prompt") or "").strip()
++    if not prompt:
++        return jsonify({"error": "prompt is required"}), 400
++    conn = get_db()
++    try:
++        cur = conn.execute("INSERT INTO lab_tests (prompt) VALUES (?)", (prompt,))
++        conn.commit()
++        row = conn.execute("SELECT * FROM lab_tests WHERE id = ?",
++                           (cur.lastrowid,)).fetchone()
++    finally:
++        conn.close()
++    test = dict(row)
++    test["runs"] = []
++    return jsonify({"ok": True, "test": test}), 201
++
++
++@app.route("/api/lab/tests/<int:test_id>", methods=["PATCH"])
++@testing_lab_required
++def lab_update_test(test_id):
++    data = request.get_json(force=True, silent=True) or {}
++    prompt = str(data.get("prompt") or "").strip()
++    if not prompt:
++        return jsonify({"error": "prompt is required"}), 400
++    conn = get_db()
++    try:
++        cur = conn.execute("UPDATE lab_tests SET prompt = ? WHERE id = ?",
++                           (prompt, test_id))
++        conn.commit()
++    finally:
++        conn.close()
++    if cur.rowcount == 0:
++        return jsonify({"error": "Not found"}), 404
++    return jsonify({"ok": True})
++
++
++@app.route("/api/lab/tests/<int:test_id>", methods=["DELETE"])
++@testing_lab_required
++def lab_delete_test(test_id):
++    conn = get_db()
++    try:
++        run_ids = [r["id"] for r in conn.execute(
++            "SELECT id FROM lab_runs WHERE test_id = ?", (test_id,)).fetchall()]
++        cur = conn.execute("DELETE FROM lab_tests WHERE id = ?", (test_id,))
++        conn.execute("DELETE FROM lab_runs WHERE test_id = ?", (test_id,))
++        conn.commit()
++    finally:
++        conn.close()
++    if cur.rowcount == 0:
++        return jsonify({"error": "Not found"}), 404
++    for rid in run_ids:
++        _lab_remove_shot_dir(rid)
++    return jsonify({"ok": True})
++
++
++@app.route("/api/lab/tests/<int:test_id>/runs", methods=["POST"])
++@testing_lab_required
++def lab_create_run(test_id):
++    """One-click 'add a run': every field is optional, the column appears
++    immediately and gets filled in inline on the board."""
++    data = request.get_json(force=True, silent=True) or {}
++    fields, err = _lab_run_fields(data, partial=False)
++    if err:
++        return jsonify({"error": err}), 400
++    conn = get_db()
++    try:
++        if not conn.execute("SELECT 1 FROM lab_tests WHERE id = ?",
++                            (test_id,)).fetchone():
++            return jsonify({"error": "Not found"}), 404
++        cur = conn.execute(
++            "INSERT INTO lab_runs (test_id, model_name, verdict, notes, run_date) "
++            "VALUES (?, ?, ?, ?, COALESCE(NULLIF(?, ''), date('now')))",
++            (test_id, fields["model_name"], fields["verdict"],
++             fields.get("notes", ""), fields.get("run_date", "")),
++        )
++        conn.commit()
++        row = conn.execute("SELECT * FROM lab_runs WHERE id = ?",
++                           (cur.lastrowid,)).fetchone()
++    finally:
++        conn.close()
++    return jsonify({"ok": True, "run": _lab_run_dict(row)}), 201
++
++
++@app.route("/api/lab/runs/<int:run_id>", methods=["PATCH"])
++@testing_lab_required
++def lab_update_run(run_id):
++    data = request.get_json(force=True, silent=True) or {}
++    fields, err = _lab_run_fields(data, partial=True)
++    if err:
++        return jsonify({"error": err}), 400
++    conn = get_db()
++    try:
++        if not fields:
++            row = conn.execute("SELECT * FROM lab_runs WHERE id = ?",
++                               (run_id,)).fetchone()
++            if not row:
++                return jsonify({"error": "Not found"}), 404
++            return jsonify({"ok": True, "run": _lab_run_dict(row)})
++        sets = ", ".join(f"{k} = ?" for k in fields)
++        cur = conn.execute(f"UPDATE lab_runs SET {sets} WHERE id = ?",
++                           (*fields.values(), run_id))
++        conn.commit()
++        if cur.rowcount == 0:
++            return jsonify({"error": "Not found"}), 404
++        row = conn.execute("SELECT * FROM lab_runs WHERE id = ?",
++                           (run_id,)).fetchone()
++    finally:
++        conn.close()
++    return jsonify({"ok": True, "run": _lab_run_dict(row)})
++
++
++@app.route("/api/lab/runs/<int:run_id>", methods=["DELETE"])
++@testing_lab_required
++def lab_delete_run(run_id):
++    conn = get_db()
++    try:
++        cur = conn.execute("DELETE FROM lab_runs WHERE id = ?", (run_id,))
++        conn.commit()
++    finally:
++        conn.close()
++    if cur.rowcount == 0:
++        return jsonify({"error": "Not found"}), 404
++    _lab_remove_shot_dir(run_id)
++    return jsonify({"ok": True})
++
++
++@app.route("/api/lab/runs/<int:run_id>/screenshots", methods=["POST"])
++@testing_lab_required
++def lab_add_screenshots(run_id):
++    files = [f for f in request.files.getlist("file") if f and f.filename]
++    if not files:
++        return jsonify({"error": "No file provided"}), 400
++    for f in files:
++        if Path(f.filename).suffix.lower() not in _LAB_SHOT_EXTS:
++            return jsonify({"error": "Only png/jpg/jpeg/webp/gif allowed"}), 400
++    conn = get_db()
++    try:
++        row = conn.execute("SELECT * FROM lab_runs WHERE id = ?",
++                           (run_id,)).fetchone()
++        if not row:
++            return jsonify({"error": "Not found"}), 404
++        shots = _lab_run_dict(row)["screenshots"]
++        dest = _lab_shot_dir(run_id)
++        dest.mkdir(parents=True, exist_ok=True)
++        for f in files:
++            name = f"{uuid.uuid4().hex}{Path(f.filename).suffix.lower()}"
++            f.save(str(dest / name))
++            # URL is built as a constant prefix (not derived from UPLOAD_DIR)
++            # so tests can point UPLOAD_DIR at a temp dir.
++            shots.append(f"/static/uploads/lab/{run_id}/{name}")
++        conn.execute("UPDATE lab_runs SET screenshots = ? WHERE id = ?",
++                     (json.dumps(shots), run_id))
++        conn.commit()
++    finally:
++        conn.close()
++    return jsonify({"ok": True, "screenshots": shots})
++
++
++@app.route("/api/lab/runs/<int:run_id>/screenshots", methods=["DELETE"])
++@testing_lab_required
++def lab_delete_screenshot(run_id):
++    data = request.get_json(force=True, silent=True) or {}
++    url = str(data.get("url") or "")
++    conn = get_db()
++    try:
++        row = conn.execute("SELECT * FROM lab_runs WHERE id = ?",
++                           (run_id,)).fetchone()
++        if not row:
++            return jsonify({"error": "Not found"}), 404
++        shots = _lab_run_dict(row)["screenshots"]
++        if url not in shots:
++            return jsonify({"error": "Not found"}), 404
++        shots.remove(url)
++        conn.execute("UPDATE lab_runs SET screenshots = ? WHERE id = ?",
++                     (json.dumps(shots), run_id))
++        conn.commit()
++    finally:
++        conn.close()
++    # Unlink by basename only — the URL never becomes a filesystem path, so a
++    # crafted url can't traverse outside this run's folder.
++    target = _lab_shot_dir(run_id) / Path(url).name
++    try:
++        target.unlink(missing_ok=True)
++    except OSError:
++        app.logger.warning("lab: could not unlink %s", target)
++    return jsonify({"ok": True, "screenshots": shots})
++
++
+ @app.route("/api/videos", methods=["GET"])
+ @login_required
+ def list_videos():
+--- a/templates/index.html
++++ b/templates/index.html
+@@ -3241,6 +3241,7 @@
+                     </div>
+                     <button class="profile-menu-item" onclick="openSettings()">Settings</button>
+                     <button class="profile-menu-item" id="factoryMenuItem" onclick="openFactory()" style="display:none;color:#f5b942;">🏭 Factory</button>
++                    <button class="profile-menu-item" id="testingLabMenuItem" onclick="openTestingLab()" style="display:none;color:#7fd4a8;">🧪 Testing Lab</button>
+                     <button class="profile-menu-item" onclick="signOut()">Sign out</button>
+                 </div>
+             </div>
+@@ -8573,6 +8574,11 @@
+                 if (data.authenticated) applyProfilePic(data.profile_pic || '');
+                 const fac = document.getElementById('factoryMenuItem');
+                 if (fac) fac.style.display = data.is_admin ? '' : 'none';
++                // Testing Lab reveals on the identity_email-gated flag (NOT
++                // is_admin, which follows plain session email) — visibility
++                // matches the server gate exactly.
++                const lab = document.getElementById('testingLabMenuItem');
++                if (lab) lab.style.display = data.can_use_testing_lab ? '' : 'none';
+                 // Feedback Lab soft-launch: server says who sees the tab
+                 // (admins now; everyone once FEEDBACK_LAB_OPEN=1).
+                 const fbt = document.getElementById('feedbackTabBtn');
+@@ -8582,6 +8588,10 @@
+         function openFactory() {
+             document.getElementById('profileMenu').classList.remove('open');
+             window.location.href = '/factory';
++        }
++        function openTestingLab() {
++            document.getElementById('profileMenu').classList.remove('open');
++            window.location.href = '/testing-lab';
+         }
+         function toggleProfileMenu() {
+             const menu = document.getElementById('profileMenu');
+--- a/usage_budget.py
++++ b/usage_budget.py
+@@ -43,7 +43,6 @@
+     "image_pro":     20,   # Gemini 3 Pro Image (pixel-face / hi-res)
+     "tts_voiceover": 30,   # ElevenLabs SAY-doc narration (per generation)
+     "claude_review": 8,    # Claude Sonnet AI Final Review (per call)
+-    "checkin_extract": 2,  # Gemini Flash vision read of a Studio screenshot
+ }
+ 
+ 
+--- a/deploy.sh
++++ b/deploy.sh
+@@ -8,7 +8,7 @@
+ 
+ MSG="${1:-quick: $(date +%H:%M)}"
+ 
+-scp app.py usage_budget.py root@148.230.108.170:/opt/idea_dashboard/
++scp app.py root@148.230.108.170:/opt/idea_dashboard/app.py
+ # NOTE: templates/static are NOT bind-mounted — they're baked into the image at
+ # build time. A plain `docker restart` will NOT pick up template/static changes;
+ # the rebuild.sh call below does `docker compose up --build`, which is required.
+@@ -22,12 +22,4 @@
+ 
+ ssh root@148.230.108.170 "cd /opt/idea_dashboard && ./rebuild.sh \"$MSG\""
+ 
+-# data/*.json (Feedback Lab imports) live in the root_dashboard_data volume,
+-# which is mounted OVER /app/data and shadows the image's baked copy — so sync
+-# them into the volume AFTER the rebuild or the container never sees new drops.
+-if [ -d data ]; then
+-  scp -r data root@148.230.108.170:/opt/idea_dashboard/
+-  ssh root@148.230.108.170 'docker cp /opt/idea_dashboard/data/. root-idea-dashboard-1:/app/data/'
+-fi
+-
+ echo "deployed @ $(date +%H:%M:%S)"

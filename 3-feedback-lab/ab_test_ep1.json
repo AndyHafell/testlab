@@ -1,0 +1,42 @@
+{
+  "video": "I Gave Fable 5 Six Impossible Prompts (One Shot Each)",
+  "published": "2026-06-11",
+  "test_type": "title_and_thumbnail",
+  "status": "running",
+  "snapshot_at": "2026-06-12",
+  "views_since_test_start": 2206,
+  "variants": [
+    {
+      "label": "A",
+      "title": "Fable 5 Built a GTA Clone in One Prompt",
+      "thumb_desc": "ONE PROMPT gold pixel text over pixel GTA street scene, crab mascot",
+      "watch_time_share_pct": 32.0
+    },
+    {
+      "label": "B",
+      "title": "I Gave Fable 5 Six Impossible Prompts (One Shot Each)",
+      "thumb_desc": "pixel city + big gold 6 + crab mascot + ONE SHOT tag",
+      "watch_time_share_pct": 37.2,
+      "leading": true
+    },
+    {
+      "label": "C",
+      "title": "Claude Fable 5 vs 6 \"IMPOSSIBLE\" Prompts! (One Shot)",
+      "thumb_desc": "JUST DROPPED 6-panel grid of all six builds",
+      "watch_time_share_pct": 30.8
+    }
+  ],
+  "first_24h": {
+    "views": 2206,
+    "typical_band": [
+      460,
+      690
+    ],
+    "ctr_pct": 9.7,
+    "avd": "3:08",
+    "video_length": "12:15",
+    "ranking": "1 of 10",
+    "likes": 59,
+    "comments": 9
+  }
+}
