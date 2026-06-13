@@ -2,8 +2,8 @@
 
 **The impossible-prompts library.** Every episode I throw a batch of one-shot
 prompts at the newest AI model — no follow-ups, no retries... or sometimes... 
-But it's all transparent for you to watch — so everything lands here: the exact prompt, and the unedited code it produced. Copy any
-prompt, run it on whatever model exists when you're reading this, and compare.
+But it's all transparent for you to watch — so everything lands here: the exact prompt, and the unedited code it produced. 
+Copy any prompt, (Yoink that shit) run it on whatever model exists when you're reading this, and compare.
 
 This library grows every episode. Prompts are numbered globally and never
 renumbered — `#01` will still be `#01` at prompt `#500`.
