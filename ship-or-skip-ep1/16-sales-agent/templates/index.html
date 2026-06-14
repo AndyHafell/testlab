@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Talk to Mira · AI Mate</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <header class="bar">
+    <div class="avatar"></div>
+    <div>
+      <div class="name">Mira</div>
+      <div class="status" id="status">Tap the mic to talk</div>
+    </div>
+  </header>
+
+  <div id="transcript">
+    <div class="empty" id="empty">
+      Tap the mic and ask me anything about AI Mate — Andy's community for building
+      AI agents and automations without code.
+    </div>
+  </div>
+
+  <div class="hint">Mira can answer questions and help you start a free 7-day trial.</div>
+  <footer class="dock">
+    <button id="mic" title="Talk">🎙️</button>
+    <a id="cta" href="{{ skool_url }}" target="_blank" rel="noopener">Start your free 7-day trial</a>
+  </footer>
+
+  <script type="module" src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Conversion Dashboard · AI Mate</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <style>
+    body{display:block;padding:24px;max-width:920px;margin:0 auto}
+    h1{font-size:20px}
+    .kpis{display:flex;gap:16px;margin:18px 0}
+    .kpi{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+    .kpi .l{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+    .kpi .n{font-size:28px;font-weight:700;margin-top:6px}
+    .kpi .n.green{color:var(--green)} .kpi .n.violet{color:var(--violet)}
+    .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:18px}
+    table{width:100%;border-collapse:collapse} td,th{text-align:left;padding:8px;border-bottom:1px solid var(--line);font-size:14px}
+  </style>
+</head>
+<body>
+  <h1>Conversion Dashboard</h1>
+  <div class="kpis">
+    <div class="kpi"><div class="l">Total chats</div><div class="n" id="k-chats">–</div></div>
+    <div class="kpi"><div class="l">Conversions</div><div class="n green" id="k-conv">–</div></div>
+    <div class="kpi"><div class="l">Conversion rate</div><div class="n violet" id="k-rate">–</div></div>
+  </div>
+  <div class="panel"><canvas id="chart" height="120"></canvas></div>
+  <div class="panel">
+    <div class="l" style="color:var(--mut);text-transform:uppercase;font-size:12px">Recent conversions</div>
+    <table><tbody id="recent"></tbody></table>
+  </div>
+  <script>window.DASH_TOKEN = "{{ token }}";</script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+# Private business numbers — never commit the cache or history
+data/store.json
+data/history/
+data/seed.json
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Secrets (this app reads existing env files in place; none should live here)
+.env
+*.pickle
+
+.DS_Store

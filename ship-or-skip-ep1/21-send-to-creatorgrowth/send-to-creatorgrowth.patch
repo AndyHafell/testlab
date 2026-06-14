@@ -1,0 +1,261 @@
+diff --git a/app.py b/app.py
+index c4f0b87..3ac2bc0 100644
+--- a/app.py
++++ b/app.py
+@@ -529,31 +529,35 @@ def _maybe_drop_videos_video_id_unique(conn):
+     col_csv = ", ".join(cols)
+     # Build the new CREATE TABLE: same column ordering, but drop UNIQUE on
+     # video_id. Other column-level constraints are preserved verbatim.
+-    new_create = (
+-        "CREATE TABLE videos_new (\n"
+-        "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+-        "    video_id TEXT NOT NULL,\n"
+-        "    title TEXT,\n"
+-        "    channel_title TEXT,\n"
+-        "    channel_thumb TEXT DEFAULT '',\n"
+-        "    thumbnail_url TEXT,\n"
+-        "    view_count INTEGER,\n"
+-        "    duration TEXT,\n"
+-        "    published_at TEXT,\n"
+-        "    status TEXT DEFAULT 'options',\n"
+-        "    outlier_score REAL DEFAULT 0,\n"
+-        "    channel_avg_views INTEGER DEFAULT 0,\n"
+-        "    added_at TEXT DEFAULT CURRENT_TIMESTAMP,\n"
+-        "    transformed INTEGER DEFAULT 0,\n"
+-        "    tucked INTEGER DEFAULT 0,\n"
+-        "    editor_state TEXT,\n"
+-        "    vocal_doc TEXT,\n"
+-        "    voiceover_state TEXT,\n"
+-        "    visuals_doc TEXT,\n"
+-        "    visual_tags TEXT,\n"
+-        "    user_id INTEGER REFERENCES users(id)\n"
+-        ")"
+-    )
++    _known = [
++        "    id INTEGER PRIMARY KEY AUTOINCREMENT",
++        "    video_id TEXT NOT NULL",
++        "    title TEXT",
++        "    channel_title TEXT",
++        "    channel_thumb TEXT DEFAULT ''",
++        "    thumbnail_url TEXT",
++        "    view_count INTEGER",
++        "    duration TEXT",
++        "    published_at TEXT",
++        "    status TEXT DEFAULT 'options'",
++        "    outlier_score REAL DEFAULT 0",
++        "    channel_avg_views INTEGER DEFAULT 0",
++        "    added_at TEXT DEFAULT CURRENT_TIMESTAMP",
++        "    transformed INTEGER DEFAULT 0",
++        "    tucked INTEGER DEFAULT 0",
++        "    editor_state TEXT",
++        "    vocal_doc TEXT",
++        "    voiceover_state TEXT",
++        "    visuals_doc TEXT",
++        "    visual_tags TEXT",
++        "    user_id INTEGER REFERENCES users(id)",
++    ]
++    # Columns added by later migrations (e.g. scheduled_at) exist in the live
++    # table but not in the list above — carry them over untyped so the INSERT
++    # below never hits "videos_new has no column named X".
++    _known_names = {line.strip().split()[0] for line in _known}
++    _known += [f"    {c}" for c in cols if c not in _known_names]
++    new_create = "CREATE TABLE videos_new (\n" + ",\n".join(_known) + "\n)"
+     try:
+         conn.execute("BEGIN")
+         conn.execute(new_create)
+@@ -3014,6 +3018,8 @@ def require_auth():
+         return None
+     if path == "/api/cards/push":
+         return None
++    if path == "/api/cards/push-bench":
++        return None
+     if path == "/api/auth/skool/dm-code/admin-verify":
+         return None
+     if path == "/api/admin/paid-members":
+@@ -7256,6 +7262,186 @@ def push_card():
+     return jsonify({"ok": True, "card": row_to_dict(row), "content_doc_path": content_doc_path}), 201
+ 
+ 
++def _decode_thumb_b64(s):
++    """Decode a thumbnail that may be raw base64 or a data: URL. Returns bytes
++    or None (empty/garbage slots stay blank rather than 500 the whole push)."""
++    import base64
++    if not isinstance(s, str) or not s.strip():
++        return None
++    raw = s.strip()
++    if raw.startswith("data:"):
++        comma = raw.find(",")
++        if comma != -1:
++            raw = raw[comma + 1:]
++    try:
++        return base64.b64decode(raw, validate=False)
++    except Exception:
++        return None
++
++
++@app.route("/api/cards/push-bench", methods=["POST"])
++def push_bench():
++    """Push a fully-packaged bench (up to 9 titles + 9 thumbnails) into the
++    caller's tenant as one Packaging card — the programmatic equivalent of a
++    hand-built packaging card. This is what the portable `creator-packaging`
++    skill calls after it generates a bench locally.
++
++    Auth: `Authorization: Bearer <api_token>` (Settings → API Access).
++    Body: {
++        "card_title":  str   (optional, defaults to titles[0]),
++        "status":      str   (optional, default 'packaging'),
++        "titles":      [str] (slot-aligned, up to 9),
++        "thumbnails":  [str] (slot-aligned base64 PNGs or data: URLs, up to 9)
++    }
++    titles[i] and thumbnails[i] land together in slot i. Thumbnails are stored
++    under the caller's own upload dir and never leak across tenants. Re-running
++    with the same lead title UPDATEs the existing card in place (idempotent —
++    no duplicate cards).
++
++    "append": true → never overwrite existing slots. The incoming titles/thumbs
++    are placed in the slots *below* the last one already used (so a card with 6
++    filled slots + an append of 9 ends with slots 7–15 filled, 1–6 untouched).
++    Default (append falsy) replaces the bench from slot 0. Returns
++    {ok, card, url, slots_filled, added, start_slot}.
++    """
++    uid = _api_token_user_id()
++    if uid is None:
++        return jsonify({"error": "Unauthorized", "detail": "Provide a valid card-push token in the Authorization: Bearer header."}), 401
++    data = request.get_json(force=True, silent=True) or {}
++    titles_in = data.get("titles") or []
++    thumbs_in = data.get("thumbnails") or []
++    if not isinstance(titles_in, list) or not isinstance(thumbs_in, list):
++        return jsonify({"error": "titles and thumbnails must be arrays"}), 400
++    titles_in = [str(t or "").strip() for t in titles_in][:9]
++    thumbs_in = list(thumbs_in)[:9]
++    if not any(titles_in):
++        return jsonify({"error": "at least one title is required"}), 400
++    status = (data.get("status") or "packaging").strip() or "packaging"
++    card_title = (data.get("card_title") or "").strip() or next((t for t in titles_in if t), "(untitled)")
++    append = bool(data.get("append"))
++
++    conn = get_db()
++    try:
++        urow = conn.execute(
++            "SELECT display_name, profile_pic FROM users WHERE id = ?", (uid,)
++        ).fetchone()
++        channel_title = ((urow["display_name"] if urow else "") or "Creator")
++        channel_thumb = ((urow["profile_pic"] if urow else "") or "")
++
++        # Idempotent: reuse the caller's existing card with this lead title.
++        existing = conn.execute(
++            "SELECT id, video_id FROM videos WHERE user_id = ? AND title = ?",
++            (uid, card_title),
++        ).fetchone()
++        if existing:
++            card_id = existing["id"]
++            video_id = existing["video_id"]
++            conn.execute(
++                "UPDATE videos SET status = ?, channel_title = ?, channel_thumb = ? WHERE id = ? AND user_id = ?",
++                (status, channel_title, channel_thumb, card_id, uid),
++            )
++        else:
++            video_id = "cg_" + uuid.uuid4().hex[:10]
++            conn.execute(
++                """INSERT INTO videos (video_id, title, channel_title, channel_thumb, thumbnail_url,
++                       view_count, duration, published_at, status, outlier_score, channel_avg_views, transformed, user_id)
++                   VALUES (?, ?, ?, ?, '', 0, '', '', ?, 0, 0, 1, ?)""",
++                (video_id, card_title, channel_title, channel_thumb, status, uid),
++            )
++            card_id = conn.execute(
++                "SELECT id FROM videos WHERE video_id = ? AND user_id = ?", (video_id, uid)
++            ).fetchone()["id"]
++        conn.commit()
++
++        det = conn.execute(
++            "SELECT id, original_titles, original_thumbs FROM video_details WHERE video_id = ?",
++            (card_id,),
++        ).fetchone()
++
++        # On append, preserve the slots already on the card and write the new
++        # ones BELOW the last used slot — a re-run can never overwrite a
++        # creator's earlier work. Default (replace) rebuilds from slot 0.
++        existing_titles, existing_thumbs = [], []
++        if det and append:
++            try:
++                existing_titles = json.loads(det["original_titles"]) or []
++                existing_thumbs = json.loads(det["original_thumbs"]) or []
++            except (TypeError, ValueError):
++                existing_titles, existing_thumbs = [], []
++
++        start = 0
++        if append:
++            for idx in range(max(len(existing_titles), len(existing_thumbs))):
++                t = existing_titles[idx] if idx < len(existing_titles) else ""
++                u = existing_thumbs[idx] if idx < len(existing_thumbs) else ""
++                if str(t).strip() or str(u).strip():
++                    start = idx + 1
++
++        final_titles = list(existing_titles) if append else []
++        final_thumbs = list(existing_thumbs) if append else []
++
++        def _ensure(arr, n):
++            while len(arr) <= n:
++                arr.append("")
++
++        # Write each new thumbnail into the caller's own upload dir, at its slot.
++        out_root = UPLOAD_DIR / "thumbs" / str(card_id)
++        out_root.mkdir(parents=True, exist_ok=True)
++        added = 0
++        for j in range(len(titles_in)):
++            slot = start + j
++            _ensure(final_titles, slot)
++            _ensure(final_thumbs, slot)
++            final_titles[slot] = titles_in[j]
++            png = _decode_thumb_b64(thumbs_in[j]) if j < len(thumbs_in) else None
++            if png:
++                p = out_root / f"slot{slot}_{uuid.uuid4().hex[:8]}.png"
++                p.write_bytes(png)
++                final_thumbs[slot] = "/" + str(p.relative_to(Path(app.root_path))).replace(os.sep, "/")
++                added += 1
++
++        # Keep at least a full 9-slot grid.
++        while len(final_titles) < 9:
++            final_titles.append("")
++        while len(final_thumbs) < 9:
++            final_thumbs.append("")
++
++        ot = json.dumps(final_titles)
++        oth = json.dumps(final_thumbs)
++        if det:
++            conn.execute(
++                "UPDATE video_details SET original_titles = ?, original_thumbs = ? WHERE video_id = ?",
++                (ot, oth, card_id),
++            )
++        else:
++            conn.execute(
++                """INSERT INTO video_details (video_id, inspo_thumbs, inspo_titles, original_thumbs, original_titles, custom_fields)
++                   VALUES (?, '["","",""]', '["","",""]', ?, ?, '[]')""",
++                (card_id, oth, ot),
++            )
++        first_thumb = next((u for u in final_thumbs if u), "")
++        if first_thumb:
++            conn.execute(
++                "UPDATE videos SET thumbnail_url = ? WHERE id = ? AND user_id = ?",
++                (first_thumb, card_id, uid),
++            )
++        conn.commit()
++        row = conn.execute(
++            "SELECT * FROM videos WHERE id = ? AND user_id = ?", (card_id, uid)
++        ).fetchone()
++    finally:
++        conn.close()
++    slots_filled = sum(1 for u in final_thumbs if u)
++    return jsonify({
++        "ok": True,
++        "card": row_to_dict(row),
++        "url": "https://creatorgrowth.com/",
++        "slots_filled": slots_filled,
++        "added": added,
++        "start_slot": start,
++    }), 201
++
++
+ @app.route("/api/content", methods=["GET"])
+ def list_content():
+     """List folders and files in a content directory. Scoped to the caller's

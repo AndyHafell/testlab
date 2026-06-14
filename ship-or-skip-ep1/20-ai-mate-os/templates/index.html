@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Mate OS</title>
+  <link rel="preconnect" href="https://i.ytimg.com" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <div class="bg-aurora"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">◆</div>
+      <div class="brand-text">
+        <h1>AI Mate OS</h1>
+        <span class="brand-sub">aimateos.com · everything dashboard</span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div class="sources" id="sources" title="Live source health"></div>
+      <div class="refreshed" id="refreshed">—</div>
+      <button class="btn-refresh" id="refreshBtn">
+        <span class="btn-refresh-icon">⟳</span><span>Refresh</span>
+      </button>
+    </div>
+  </header>
+
+  <main id="app">
+    <!-- HERO -->
+    <section class="hero" id="hero"></section>
+
+    <!-- CHANNEL GROWTH -->
+    <section class="panel">
+      <div class="panel-head">
+        <h2><span class="dot dot-red"></span> Channel growth</h2>
+        <div class="range-toggle" id="rangeToggle">
+          <button data-range="3">3M</button>
+          <button data-range="6">6M</button>
+          <button data-range="12" class="active">12M</button>
+          <button data-range="0">All</button>
+        </div>
+      </div>
+      <div class="grid grid-2">
+        <div class="chart-card"><h3>YouTube views <span class="muted">/ month</span></h3><div class="chart" id="chartViews"></div></div>
+        <div class="chart-card"><h3>Subscribers <span class="muted">over time</span></h3><div class="chart" id="chartSubs"></div></div>
+      </div>
+    </section>
+
+    <!-- REVENUE & COMMUNITY -->
+    <section class="panel">
+      <div class="panel-head"><h2><span class="dot dot-gold"></span> Revenue &amp; community</h2></div>
+      <div class="grid grid-2">
+        <div class="chart-card"><h3>MRR <span class="muted">/ month</span></h3><div class="chart" id="chartMrr"></div></div>
+        <div class="chart-card"><h3>Skool members <span class="muted">over time</span></h3><div class="chart" id="chartMembers"></div></div>
+      </div>
+      <div class="grid grid-2">
+        <div class="chart-card"><h3>Member mix <span class="muted">live</span></h3><div id="memberMix"></div></div>
+        <div class="chart-card"><h3>Cohort retention <span class="muted">% retained by month</span></h3><div id="cohorts"></div></div>
+      </div>
+    </section>
+
+    <!-- CROSS-PLATFORM REACH -->
+    <section class="panel">
+      <div class="panel-head"><h2><span class="dot dot-violet"></span> Cross-platform reach</h2></div>
+      <div class="grid grid-3" id="reachGrid"></div>
+    </section>
+
+    <!-- WEBSITES + GITHUB -->
+    <section class="panel">
+      <div class="grid grid-2">
+        <div>
+          <div class="panel-head"><h2><span class="dot dot-cyan"></span> Websites <span class="muted">· 30-day visitors</span></h2></div>
+          <div id="websites" class="site-grid"></div>
+        </div>
+        <div>
+          <div class="panel-head"><h2><span class="dot dot-green"></span> GitHub stars</h2></div>
+          <div id="github"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIDEO RESULTS -->
+    <section class="panel">
+      <div class="panel-head">
+        <h2><span class="dot dot-red"></span> Video results</h2>
+        <span class="muted" id="videoMeta"></span>
+      </div>
+      <div class="table-wrap">
+        <table class="vtable" id="videoTable">
+          <thead>
+            <tr>
+              <th data-sort="title" class="left">Video</th>
+              <th data-sort="views" class="num active">Views</th>
+              <th data-sort="outlier" class="num">Outlier</th>
+              <th data-sort="ctr" class="num">CTR</th>
+              <th data-sort="rpm" class="num">RPM</th>
+              <th data-sort="watchHours" class="num">Watch hrs</th>
+              <th data-sort="publishedAt" class="num">Published</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>AI Mate OS</span><span class="muted">·</span>
+    <span class="muted">one runnable app · reads your real numbers</span>
+  </footer>
+
+  <div class="tooltip" id="tooltip"></div>
+  <div class="toast" id="toast"></div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

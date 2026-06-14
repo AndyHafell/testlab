@@ -1,0 +1,8 @@
+.superpowers/
+.env
+venv/
+__pycache__/
+*.pyc
+*.db
+*.db-wal
+*.db-shm

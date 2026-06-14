@@ -45,6 +45,24 @@ your own codebase.
 | 14 | [Writing Mode (Google Docs yoink)](ep2/14-writing-mode/PROMPT.md) | patch + tests | apply after 12 |
 | 15 | [Claude Code Mission Control](ep2/15-mission-control/PROMPT.md) | node app | `node server.js` |
 
+### Ship or Skip ep1 — I Built 6 AI Tools for My Business
+**Watch: (video coming — link lands here at publish)**
+
+A different format from the impossible-prompts episodes: six real tools for my
+own business, each one brief-brainstormed with the agent first (Claude Opus
+4.8), built live, then judged **ship or skip**. Two were built into a private
+production SaaS and ship as a patch / prompt-only — point the same prompt at
+your own codebase.
+
+| # | Prompt | What you get | Run it |
+|---|--------|--------------|--------|
+| 16 | [AI voice sales agent](ship-or-skip-ep1/16-sales-agent/PROMPT.md) | Flask app + ElevenLabs agent + conversion dashboard | `pip install -r requirements.txt && python app.py` |
+| 17 | [ScreenPost (web + Electron)](ship-or-skip-ep1/17-screenpost-web/PROMPT.md) | Electron app + full Vitest suite | `npm install && npm run dev` |
+| 18 | [ScreenPost.io landing page](ship-or-skip-ep1/18-screenpost-site/PROMPT.md) | Next.js 16 + Tailwind v4 site | `npm install && npm run dev` |
+| 19 | [Feedback Lab — picture mode](ship-or-skip-ep1/19-feedback-lab-pictures/PROMPT.md) | prompt only (private SaaS) | apply to your own app |
+| 20 | [AI Mate OS dashboard](ship-or-skip-ep1/20-ai-mate-os/PROMPT.md) | Flask everything-dashboard | `pip install -r requirements.txt && python app.py` |
+| 21 | [Send-to-CreatorGrowth](ship-or-skip-ep1/21-send-to-creatorgrowth/PROMPT.md) | patch + tests (private SaaS) | apply to your own app |
+
 ## Rules every episode runs under
 
 - **One shot each** — no back-and-forth, no retries.
@@ -52,6 +70,7 @@ your own codebase.
 - Libraries from a CDN allowed; bundled asset files not.
 - Builds into private codebases ship as **patches of every line the model
   wrote** — the prompt is the product, the patch is the proof.
-- Model is logged per episode (ep1–ep2: `claude-fable-5`).
+- Model is logged per episode (ep1–ep2: `claude-fable-5`; ship-or-skip-ep1: `claude-opus-4-8`).
+- The **Ship or Skip** series is the exception to "one shot each": each build is brainstormed with the agent first, then built — the take-home prompt is the brainstorm-first brief.
 
 MIT licensed. Yoink anything.
