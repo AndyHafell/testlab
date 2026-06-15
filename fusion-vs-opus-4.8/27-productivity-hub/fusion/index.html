@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Flux — Productivity Workspace</title>
+<style>
+  :root{
+    /* ── Surfaces (elevation by lightness) ── */
+    --bg-0:#070810;
+    --bg-1:#0c0e1a;
+    --bg-2:#11142440;
+    --surface:#13162688;
+    --surface-2:#181c2e;
+    --surface-3:#1f2438;
+    --elev:#252b42;
+
+    /* ── Text ── */
+    --text:#eef2ff;
+    --muted:#8b93b3;
+    --faint:#5a6080;
+
+    /* ── Borders ── */
+    --border:rgba(255,255,255,.07);
+    --border-2:rgba(255,255,255,.13);
+
+    /* ── Accent ── */
+    --accent:#7c5cff;
+    --accent-2:#22d3ee;
+    --accent-soft:rgba(124,92,255,.15);
+
+    /* ── Priority ── */
+    --p-low:#38bdf8;
+    --p-med:#fbbf24;
+    --p-high:#fb7185;
+    --green:#34d399;
+
+    /* ── Geometry ── */
+    --r1:8px; --r2:12px; --r3:16px; --r4:22px; --rpill:999px;
+    --s1:.25rem; --s2:.5rem; --s3:.75rem; --s4:1rem; --s5:1.5rem; --s6:2rem; --s7:3rem;
+
+    /* ── Shadows ── */
+    --sh-sm:0 4px 16px rgba(0,0,0,.3);
+    --sh-md:0 14px 40px rgba(0,0,0,.42);
+    --sh-lg:0 30px 80px rgba(0,0,0,.55);
+    --glow:0 0 0 1px rgba(124,92,255,.3), 0 16px 50px rgba(124,92,255,.22);
+
+    /* ── Motion ── */
+    --ease:cubic-bezier(.22,.85,.32,1);
+    --fast:140ms var(--ease);
+    --med:260ms var(--ease);
+    --slow:420ms var(--ease);
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    color:var(--text);
+    background:
+      radial-gradient(1100px 600px at 12% -8%, rgba(124,92,255,.20), transparent 60%),
+      radial-gradient(900px 500px at 98% 4%, rgba(34,211,238,.14), transparent 55%),
+      radial-gradient(800px 700px at 50% 120%, rgba(124,92,255,.10), transparent 55%),
+      var(--bg-0);
+    overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  button,input,select,textarea{font:inherit;color:inherit}
+  button{cursor:pointer;background:none;border:none}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:99px}
+  ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.18)}
+
+  /* ───── Shell ───── */
+  .shell{display:grid;grid-template-columns:262px 1fr;height:100vh}
+
+  .sidebar{
+    background:linear-gradient(180deg,rgba(13,15,28,.92),rgba(7,8,16,.86));
+    border-right:1px solid var(--border);
+    backdrop-filter:blur(22px);
+    padding:var(--s5) var(--s4);
+    display:flex;flex-direction:column;
+    position:relative;
+  }
+  .brand{display:flex;align-items:center;gap:var(--s3);padding:0 var(--s2);margin-bottom:var(--s6)}
+  .brand-mark{
+    width:44px;height:44px;border-radius:13px;display:grid;place-items:center;
+    background:linear-gradient(135deg,var(--accent),var(--accent-2));
+    box-shadow:0 12px 32px rgba(124,92,255,.4);
+    font-weight:900;font-size:22px;letter-spacing:-.06em;color:#0b0b14;
+  }
+  .brand h1{font-size:1.18rem;letter-spacing:-.04em}
+  .brand p{font-size:.76rem;color:var(--muted);margin-top:1px}
+
+  .nav{display:flex;flex-direction:column;gap:var(--s1)}
+  .nav-btn{
+    display:flex;align-items:center;gap:var(--s3);
+    padding:.78rem .85rem;border-radius:13px;
+    color:var(--muted);font-weight:500;font-size:.94rem;
+    border:1px solid transparent;
+    transition:background var(--fast),color var(--fast),border-color var(--fast),transform var(--fast);
+    text-align:left;width:100%;
+  }
+  .nav-btn .ic{width:20px;text-align:center;font-size:1.05rem;opacity:.9}
+  .nav-btn:hover{background:rgba(255,255,255,.045);color:var(--text);transform:translateX(2px)}
+  .nav-btn.active{
+    color:var(--text);
+    background:linear-gradient(135deg,rgba(124,92,255,.22),rgba(34,211,238,.1));
+    border-color:rgba(124,92,255,.3);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.07);
+  }
+  .nav-badge{margin-left:auto;font-size:.7rem;padding:.1rem .45rem;border-radius:99px;background:rgba(255,255,255,.08);color:var(--muted)}
+
+  .side-foot{margin-top:auto;display:flex;flex-direction:column;gap:var(--s3)}
+  .mini-stats{
+    background:var(--bg-2);border:1px solid var(--border);border-radius:var(--r3);
+    padding:var(--s4);display:grid;grid-template-columns:1fr 1fr;gap:var(--s3);
+  }
+  .mini-stat .v{font-size:1.25rem;font-weight:800;letter-spacing:-.03em}
+  .mini-stat .l{font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:1px}
+  .side-note{font-size:.72rem;color:var(--faint);text-align:center;line-height:1.5}
+
+  /* ───── Main ───── */
+  .main{overflow:hidden;display:flex;flex-direction:column;min-width:0}
+  .topbar{
+    display:flex;align-items:center;justify-content:space-between;gap:var(--s4);
+    padding:var(--s5) var(--s6);border-bottom:1px solid var(--border);
+  }
+  .topbar h2{font-size:clamp(1.5rem,2.6vw,2.1rem);letter-spacing:-.05em;line-height:1.05}
+  .topbar p{color:var(--muted);margin-top:.3rem;font-size:.9rem}
+  .top-actions{display:flex;gap:var(--s3);flex-shrink:0}
+
+  .view-wrap{flex:1;overflow-y:auto;padding:var(--s6)}
+  .view{display:none;animation:fadeUp .34s var(--ease)}
+  .view.active{display:block}
+
+  /* ───── Buttons ───── */
+  .btn{
+    display:inline-flex;align-items:center;gap:var(--s2);
+    padding:.62rem 1rem;border-radius:var(--rpill);
+    border:1px solid var(--border);background:rgba(255,255,255,.045);
+    font-weight:500;font-size:.9rem;
+    transition:transform var(--fast),background var(--fast),border-color var(--fast),box-shadow var(--fast);
+  }
+  .btn:hover{transform:translateY(-1px);background:rgba(255,255,255,.08);border-color:var(--border-2)}
+  .btn.primary{
+    background:linear-gradient(135deg,var(--accent),var(--accent-2));
+    border-color:transparent;color:#0b0b14;font-weight:700;
+    box-shadow:0 10px 28px rgba(124,92,255,.32);
+  }
+  .btn.primary:hover{box-shadow:0 14px 36px rgba(124,92,255,.42)}
+  .btn.ghost{background:transparent}
+  .btn.sm{padding:.42rem .7rem;font-size:.82rem}
+  .icon-btn{
+    width:32px;height:32px;border-radius:9px;display:grid;place-items:center;
+    border:1px solid var(--border);background:rgba(255,255,255,.04);color:var(--muted);
+    transition:color var(--fast),background var(--fast),transform var(--fast);font-size:.95rem;
+  }
+  .icon-btn:hover{color:var(--text);background:rgba(255,255,255,.09);transform:translateY(-1px)}
+
+  /* ───── Cards / Panels ───── */
+  .panel{
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--r4);
+    box-shadow:var(--sh-sm);backdrop-filter:blur(16px);
+  }
+  .grid{display:grid;gap:var(--s5)}
+  .muted{color:var(--muted)}
+  .section-head{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);margin-bottom:var(--s4)}
+  .section-head h3{font-size:1.02rem;letter-spacing:-.02em}
+  .pill{
+    display:inline-flex;align-items:center;gap:.35rem;
+    padding:.24rem .58rem;border-radius:var(--rpill);font-size:.74rem;font-weight:500;
+    background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--muted);white-space:nowrap;
+  }
+  .empty{
+    padding:var(--s5);text-align:center;color:var(--muted);font-size:.88rem;
+    border:1px dashed var(--border-2);border-radius:var(--r3);background:rgba(255,255,255,.02);
+  }
+
+  /* priority chips */
+  .pri{padding:.2rem .5rem;border-radius:var(--rpill);font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+  .pri-low{color:var(--p-low);background:color-mix(in srgb,var(--p-low) 16%,transparent);border:1px solid color-mix(in srgb,var(--p-low) 30%,transparent)}
+  .pri-med{color:var(--p-med);background:color-mix(in srgb,var(--p-med) 16%,transparent);border:1px solid color-mix(in srgb,var(--p-med) 30%,transparent)}
+  .pri-high{color:var(--p-high);background:color-mix(in srgb,var(--p-high) 16%,transparent);border:1px solid color-mix(in srgb,var(--p-high) 30%,transparent)}
+  .overdue{color:var(--p-high)!important;border-color:color-mix(in srgb,var(--p-high) 36%,transparent)!important;background:color-mix(in srgb,var(--p-high) 12%,transparent)!important}
+
+  /* ───── Dashboard ───── */
+  .stats-row{grid-template-columns:repeat(4,1fr)}
+  .stat-card{padding:var(--s5);position:relative;overflow:hidden}
+  .stat-card::after{content:"";position:absolute;right:-30%;bottom:-60%;width:160px;height:160px;
+    background:radial-gradient(circle,var(--accent-soft),transparent 70%)}
+  .stat-card .l{color:var(--muted);font-size:.82rem;display:flex;align-items:center;gap:.4rem}
+  .stat-card .v{font-size:2.1rem;font-weight:800;letter-spacing:-.04em;margin-top:var(--s2)}
+  .dash-grid{grid-template-columns:1.15fr .85fr}
+  .dash-col-pad{padding:var(--s5)}
+
+  /* generic task row */
+  .task-list{display:flex;flex-direction:column;gap:var(--s3)}
+  .task-row{
+    display:flex;align-items:center;gap:var(--s3);
+    padding:.85rem 1rem;border-radius:var(--r2);
+    background:rgba(255,255,255,.035);border:1px solid var(--border);
+    transition:transform var(--fast),border-color var(--fast),background var(--fast);
+    animation:fadeUp .26s var(--ease);
+  }
+  .task-row:hover{transform:translateX(3px);border-color:rgba(124,92,255,.32);background:rgba(255,255,255,.06)}
+  .task-row .tt{flex:1;font-weight:500;font-size:.92rem;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .task-row .tt.done{text-decoration:line-through;color:var(--muted)}
+
+  /* ───── Kanban ───── */
+  .kanban{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--s5);align-items:start}
+  .kcol{
+    padding:var(--s4);border-radius:var(--r4);min-height:60vh;
+    background:rgba(255,255,255,.028);border:1px solid var(--border);
+    transition:border-color var(--med),background var(--med);
+  }
+  .kcol.over{border-color:rgba(124,92,255,.55);background:rgba(124,92,255,.07);box-shadow:inset 0 0 0 1px rgba(124,92,255,.2)}
+  .kcol-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--s4);padding:0 .2rem}
+  .kcol-title{display:flex;align-items:center;gap:.5rem;font-weight:700;letter-spacing:-.02em}
+  .dot{width:9px;height:9px;border-radius:99px}
+  .dot.todo{background:var(--accent)} .dot.doing{background:var(--p-med)} .dot.done{background:var(--green)}
+  .kcards{display:flex;flex-direction:column;gap:var(--s3);min-height:40px}
+  .kcard{
+    padding:var(--s4);border-radius:var(--r2);cursor:grab;position:relative;
+    background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.025));
+    border:1px solid var(--border);box-shadow:var(--sh-sm);
+    transition:transform var(--fast),border-color var(--fast),box-shadow var(--fast),opacity var(--fast);
+    animation:fadeUp .26s var(--ease);
+  }
+  .kcard:hover{transform:translateY(-2px);border-color:rgba(124,92,255,.4);box-shadow:var(--sh-md)}
+  .kcard:active{cursor:grabbing}
+  .kcard.dragging{opacity:.4;border-style:dashed;border-color:var(--accent)}
+  .kcard .kt{font-weight:600;font-size:.94rem;margin-bottom:.5rem;word-break:break-word;padding-right:48px}
+  .kcard .kt.done{text-decoration:line-through;color:var(--muted)}
+  .kcard .kmeta{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
+  .kcard .kacts{position:absolute;top:.6rem;right:.6rem;display:flex;gap:.3rem;opacity:0;transition:opacity var(--fast)}
+  .kcard:hover .kacts{opacity:1}
+
+  /* ───── Calendar ───── */
+  .cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--s5)}
+  .cal-title{font-size:1.4rem;font-weight:700;letter-spacing:-.03em}
+  .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:var(--s2)}
+  .cal-wd{text-align:center;font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;padding-bottom:var(--s2)}
+  .cal-cell{
+    min-height:108px;padding:var(--s2) var(--s3);border-radius:var(--r2);
+    border:1px solid var(--border);background:rgba(255,255,255,.025);
+    display:flex;flex-direction:column;gap:.25rem;cursor:pointer;overflow:hidden;
+    transition:transform var(--fast),border-color var(--fast),background var(--fast);
+  }
+  .cal-cell:hover{transform:translateY(-2px);border-color:rgba(34,211,238,.4);background:rgba(255,255,255,.055)}
+  .cal-cell.out{opacity:.35}
+  .cal-cell.today{box-shadow:inset 0 0 0 1.5px rgba(124,92,255,.6)}
+  .cal-num{font-size:.8rem;color:var(--muted);align-self:flex-end;font-weight:600}
+  .cal-cell.today .cal-num{color:var(--accent)}
+  .cal-chip{
+    font-size:.7rem;padding:.2rem .4rem;border-radius:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    background:rgba(124,92,255,.16);border:1px solid rgba(124,92,255,.26);border-left-width:3px;
+  }
+
+  /* ───── To-Do ───── */
+  .todo-wrap{max-width:820px;margin:0 auto}
+  .quick-add{display:grid;grid-template-columns:1fr 130px 150px auto;gap:var(--s3);margin-bottom:var(--s5)}
+  .input,.select{
+    width:100%;padding:.72rem .85rem;border-radius:var(--r2);
+    border:1px solid var(--border);background:rgba(255,255,255,.05);outline:none;
+    transition:border-color var(--fast),box-shadow var(--fast),background var(--fast);
+  }
+  .input:focus,.select:focus{border-color:rgba(124,92,255,.6);box-shadow:0 0 0 4px rgba(124,92,255,.12);background:rgba(255,255,255,.07)}
+  .select option{background:#12152a}
+  .todo-item{
+    display:flex;align-items:center;gap:var(--s3);
+    padding:.85rem 1rem;border-radius:var(--r2);
+    background:rgba(255,255,255,.035);border:1px solid var(--border);
+    transition:transform var(--fast),border-color var(--fast),background var(--fast),opacity var(--fast);
+    animation:fadeUp .26s var(--ease);
+  }
+  .todo-item:hover{transform:translateX(4px);border-color:rgba(124,92,255,.3);background:rgba(255,255,255,.06)}
+  .todo-item.dragging{opacity:.4;border-style:dashed;border-color:var(--accent)}
+  .todo-item.done{opacity:.6}
+  .drag-handle{color:var(--faint);cursor:grab;font-size:1.1rem;line-height:1}
+  .check{
+    width:22px;height:22px;border-radius:50%;border:2px solid var(--faint);flex-shrink:0;
+    display:grid;place-items:center;transition:all var(--fast);
+  }
+  .check:hover{border-color:var(--accent)}
+  .todo-item.done .check{background:var(--green);border-color:var(--green)}
+  .todo-item.done .check::after{content:"✓";color:#06120c;font-size:.8rem;font-weight:900}
+  .todo-item .tt{flex:1;font-weight:500;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .todo-item.done .tt{text-decoration:line-through;color:var(--muted)}
+
+  /* ───── Pomodoro ───── */
+  .pomo-layout{display:grid;grid-template-columns:1.1fr .9fr;gap:var(--s5);align-items:start}
+  .pomo-card{padding:var(--s7) var(--s5);text-align:center;display:flex;flex-direction:column;align-items:center}
+  .pomo-mode{
+    padding:.34rem .85rem;border-radius:var(--rpill);font-size:.74rem;text-transform:uppercase;letter-spacing:.16em;font-weight:600;
+    border:1px solid rgba(124,92,255,.34);background:rgba(124,92,255,.13);color:#cabfff;margin-bottom:var(--s5);
+  }
+  .pomo-mode.break{border-color:rgba(52,211,153,.34);background:rgba(52,211,153,.13);color:#9af0cf}
+  .ring-wrap{position:relative;width:280px;height:280px;margin-bottom:var(--s6)}
+  .ring-wrap svg{transform:rotate(-90deg);width:100%;height:100%}
+  .ring-bg{fill:none;stroke:rgba(255,255,255,.07);stroke-width:10}
+  .ring-fg{fill:none;stroke:url(#grad);stroke-width:10;stroke-linecap:round;transition:stroke-dashoffset 1s linear}
+  .ring-fg.break{stroke:var(--green)}
+  .ring-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .pomo-time{font-size:3.8rem;font-weight:800;letter-spacing:-.05em;line-height:1;font-variant-numeric:tabular-nums}
+  .pomo-sub{color:var(--muted);font-size:.84rem;margin-top:.4rem}
+  .pomo-controls{display:flex;gap:var(--s3);align-items:center}
+  .pomo-controls .play{
+    width:66px;height:66px;border-radius:50%;display:grid;place-items:center;font-size:1.5rem;
+    background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#0b0b14;
+    box-shadow:0 12px 30px rgba(124,92,255,.4);transition:transform var(--fast),box-shadow var(--fast);
+  }
+  .pomo-controls .play:hover{transform:scale(1.06)}
+  .ctrl{width:50px;height:50px;border-radius:50%;display:grid;place-items:center;font-size:1.15rem;
+    border:1px solid var(--border);background:rgba(255,255,255,.045);color:var(--muted);transition:all var(--fast)}
+  .ctrl:hover{color:var(--text);background:rgba(255,255,255,.09);transform:scale(1.05)}
+
+  /* ───── Modal ───── */
+  .overlay{
+    position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:var(--s4);
+    background:rgba(4,5,12,.62);backdrop-filter:blur(6px);
+    opacity:0;pointer-events:none;transition:opacity var(--med);
+  }
+  .overlay.active{opacity:1;pointer-events:auto}
+  .modal{
+    width:min(540px,100%);background:#0e1120;border:1px solid var(--border-2);
+    border-radius:var(--r4);box-shadow:var(--sh-lg);padding:var(--s6);
+    transform:translateY(14px) scale(.97);transition:transform var(--med);
+  }
+  .overlay.active .modal{transform:translateY(0) scale(1)}
+  .modal-head{display:flex;align-items:start;justify-content:space-between;gap:var(--s4);margin-bottom:var(--s5)}
+  .modal-head h3{font-size:1.3rem;letter-spacing:-.03em}
+  .modal-head p{color:var(--muted);font-size:.82rem;margin-top:.25rem}
+  .field{display:flex;flex-direction:column;gap:var(--s2);margin-bottom:var(--s4)}
+  .field label{font-size:.8rem;color:var(--muted);font-weight:500}
+  .field-row{display:grid;grid-template-columns:1fr 1fr;gap:var(--s4)}
+  .modal-foot{display:flex;justify-content:flex-end;gap:var(--s3);margin-top:var(--s5)}
+
+  /* ───── Toast ───── */
+  .toast-wrap{position:fixed;bottom:var(--s5);left:50%;transform:translateX(-50%);z-index:200;display:flex;flex-direction:column;gap:var(--s2);align-items:center}
+  .toast{
+    padding:.7rem 1.1rem;border-radius:var(--rpill);font-size:.86rem;font-weight:500;
+    background:var(--elev);border:1px solid var(--border-2);box-shadow:var(--sh-md);
+    animation:toastIn .3s var(--ease);
+  }
+
+  @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes toastIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+
+  @media(max-width:1024px){
+    .stats-row{grid-template-columns:repeat(2,1fr)}
+    .dash-grid,.pomo-layout{grid-template-columns:1fr}
+  }
+  @media(max-width:860px){
+    .shell{grid-template-columns:1fr}
+    .sidebar{position:fixed;bottom:0;left:0;right:0;top:auto;height:auto;flex-direction:row;z-index:90;
+      padding:var(--s2);border-right:none;border-top:1px solid var(--border)}
+    .brand,.side-foot{display:none}
+    .nav{flex-direction:row;width:100%;justify-content:space-around}
+    .nav-btn{flex-direction:column;gap:.2rem;font-size:.66rem;padding:.45rem;text-align:center}
+    .nav-btn .nav-badge{display:none}
+    .view-wrap{padding:var(--s4);padding-bottom:90px}
+    .kanban{grid-template-columns:1fr}
+    .quick-add{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <!-- ───── Sidebar ───── -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">F</div>
+      <div><h1>Flux</h1><p>Productivity Workspace</p></div>
+    </div>
+    <nav class="nav" id="nav">
+      <button class="nav-btn active" data-view="dashboard"><span class="ic">◆</span>Dashboard</button>
+      <button class="nav-btn" data-view="kanban"><span class="ic">▦</span>Kanban<span class="nav-badge" id="nb-kanban">0</span></button>
+      <button class="nav-btn" data-view="calendar"><span class="ic">◷</span>Calendar</button>
+      <button class="nav-btn" data-view="todo"><span class="ic">☑</span>To-Do<span class="nav-badge" id="nb-todo">0</span></button>
+      <button class="nav-btn" data-view="pomodoro"><span class="ic">◉</span>Pomodoro</button>
+    </nav>
+    <div class="side-foot">
+      <div class="mini-stats">
+        <div class="mini-stat"><div class="v" id="ms-sessions">0</div><div class="l">Sessions</div></div>
+        <div class="mini-stat"><div class="v" id="ms-min">0</div><div class="l">Focus Min</div></div>
+      </div>
+      <div class="side-note">Everything saves locally to your browser.</div>
+    </div>
+  </aside>
+
+  <!-- ───── Main ───── -->
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h2 id="page-title">Dashboard</h2>
+        <p id="page-sub">Your day, priorities and focus at a glance.</p>
+      </div>
+      <div class="top-actions">
+        <button class="btn ghost sm" id="export-btn">Export</button>
+        <button class="btn primary" id="new-task-btn"><span>＋</span> New Task</button>
+      </div>
+    </div>
+
+    <div class="view-wrap">
+      <!-- Dashboard -->
+      <section class="view active" id="view-dashboard">
+        <div class="grid stats-row" style="margin-bottom:var(--s5)">
+          <div class="panel stat-card"><div class="l">◆ Open Tasks</div><div class="v" id="d-open">0</div></div>
+          <div class="panel stat-card"><div class="l">⏱ Due Today</div><div class="v" id="d-today">0</div></div>
+          <div class="panel stat-card"><div class="l">✓ Completed</div><div class="v" id="d-done">0</div></div>
+          <div class="panel stat-card"><div class="l">◉ Focus Min</div><div class="v" id="d-focus">0</div></div>
+        </div>
+        <div class="grid dash-grid">
+          <div class="panel dash-col-pad">
+            <div class="section-head"><h3>Today</h3><span class="pill" id="d-today-label"></span></div>
+            <div id="d-today-list"></div>
+          </div>
+          <div class="panel dash-col-pad">
+            <div class="section-head"><h3>Due Soon</h3><span class="pill">Next 7 days</span></div>
+            <div id="d-soon-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Kanban -->
+      <section class="view" id="view-kanban">
+        <div class="kanban" id="kanban"></div>
+      </section>
+
+      <!-- Calendar -->
+      <section class="view" id="view-calendar">
+        <div class="panel" style="padding:var(--s5)">
+          <div class="cal-head">
+            <button class="icon-btn" id="cal-prev">‹</button>
+            <div class="cal-title" id="cal-title">—</div>
+            <div style="display:flex;gap:var(--s2)">
+              <button class="btn ghost sm" id="cal-today">Today</button>
+              <button class="icon-btn" id="cal-next">›</button>
+            </div>
+          </div>
+          <div class="cal-grid" id="cal-grid"></div>
+        </div>
+      </section>
+
+      <!-- To-Do -->
+      <section class="view" id="view-todo">
+        <div class="todo-wrap">
+          <form class="quick-add" id="quick-add-form">
+            <input class="input" id="qa-title" placeholder="Quick add a task…" autocomplete="off" required>
+            <select class="select" id="qa-priority">
+              <option value="low">Low</option>
+              <option value="med" selected>Medium</option>
+              <option value="high">High</option>
+            </select>
+            <input class="input" id="qa-due" type="date">
+            <button class="btn primary" type="submit">Add</button>
+          </form>
+          <div class="task-list" id="todo-list"></div>
+        </div>
+      </section>
+
+      <!-- Pomodoro -->
+      <section class="view" id="view-pomodoro">
+        <div class="pomo-layout">
+          <div class="panel pomo-card">
+            <div class="pomo-mode" id="pomo-mode">Focus</div>
+            <div class="ring-wrap">
+              <svg viewBox="0 0 200 200">
+                <defs>
+                  <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#7c5cff"/>
+                    <stop offset="100%" stop-color="#22d3ee"/>
+                  </linearGradient>
+                </defs>
+                <circle class="ring-bg" cx="100" cy="100" r="90"/>
+                <circle class="ring-fg" id="ring-fg" cx="100" cy="100" r="90"/>
+              </svg>
+              <div class="ring-center">
+                <div class="pomo-time" id="pomo-time">25:00</div>
+                <div class="pomo-sub" id="pomo-sub">Ready to focus</div>
+              </div>
+            </div>
+            <div class="pomo-controls">
+              <button class="ctrl" id="pomo-reset" title="Reset">↻</button>
+              <button class="play" id="pomo-toggle" title="Start / Pause">▶</button>
+              <button class="ctrl" id="pomo-skip" title="Skip block">⏭</button>
+            </div>
+          </div>
+          <div class="panel" style="padding:var(--s5)">
+            <div class="section-head"><h3>Focus Setup</h3><span class="pill">25 / 5</span></div>
+            <div class="field">
+              <label>Focusing on</label>
+              <select class="select" id="pomo-task"></select>
+            </div>
+            <div class="grid" style="grid-template-columns:1fr 1fr;gap:var(--s3);margin-top:var(--s2)">
+              <div class="panel stat-card" style="border-radius:var(--r2)"><div class="l">Sessions</div><div class="v" id="ps-sessions" style="font-size:1.6rem">0</div></div>
+              <div class="panel stat-card" style="border-radius:var(--r2)"><div class="l">Focus Min</div><div class="v" id="ps-min" style="font-size:1.6rem">0</div></div>
+            </div>
+            <p class="muted" style="font-size:.82rem;margin-top:var(--s4);line-height:1.6">
+              Each completed 25-minute block counts a session, adds focus minutes, and tallies a pomodoro on the task you're focusing on. A gentle chime marks the end of every block.
+            </p>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<!-- ───── Task Modal ───── -->
+<div class="overlay" id="overlay">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-head">
+      <div><h3 id="modal-title">New Task</h3><p>One task powers Kanban, To-Do, Calendar &amp; Pomodoro.</p></div>
+      <button class="icon-btn" data-close>×</button>
+    </div>
+    <form id="task-form">
+      <input type="hidden" id="f-id">
+      <div class="field">
+        <label for="f-title">Title</label>
+        <input class="input" id="f-title" placeholder="Ship the new feature…" required autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="f-notes">Notes</label>
+        <input class="input" id="f-notes" placeholder="Optional details" autocomplete="off">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="f-status">Status</label>
+          <select class="select" id="f-status">
+            <option value="todo">To Do</option>
+            <option value="doing">Doing</option>
+            <option value="done">Done</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-priority">Priority</label>
+          <select class="select" id="f-priority">
+            <option value="low">Low</option>
+            <option value="med">Medium</option>
+            <option value="high">High</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="f-due">Due date</label>
+          <input class="input" id="f-due" type="date">
+        </div>
+        <div class="field">
+          <label for="f-tags">Tags (comma sep.)</label>
+          <input class="input" id="f-tags" placeholder="design, deep-work" autocomplete="off">
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn ghost" data-close>Cancel</button>
+        <button type="submit" class="btn primary">Save Task</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toast-wrap"></div>
+
+<script>
+"use strict";
+/* ════════════════════════════════════════════════
+   UNIFIED DATA MODEL
+   One flat array of tasks is the single source of truth.
+   Every view (Kanban / To-Do / Calendar / Pomodoro / Dashboard)
+   is just a filtered projection of this array.
+
+   task = {
+     id, title, notes,
+     status: 'todo' | 'doing' | 'done',   // drives Kanban column AND To-Do checkbox
+     priority: 'low' | 'med' | 'high',
+     due: 'YYYY-MM-DD' | '',              // string, never a Date object (no TZ drift)
+     tags: [], order: number, pomos: number,
+     createdAt, doneAt
+   }
+   ════════════════════════════════════════════════ */
+const KEY = "flux.state.v1";
+const WORK = 25 * 60, BREAK = 5 * 60;
+
+const $  = (s, r=document) => r.querySelector(s);
+const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+
+const PAGES = {
+  dashboard: ["Dashboard", "Your day, priorities and focus at a glance."],
+  kanban:    ["Kanban", "Drag work from idea to done."],
+  calendar:  ["Calendar", "Tasks land on their due day — click a day to add."],
+  todo:      ["To-Do", "Quick capture, prioritize, check off, reorder."],
+  pomodoro:  ["Pomodoro", "25 / 5 focus cycles tied to your tasks."]
+};
+
+/* ───── State + persistence ───── */
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : "id" + Math.random().toString(36).slice(2) + Date.now().toString(36));
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[c]));
+
+function defaultState(){
+  return { tasks: [], stats: { sessions: 0, minutes: 0 } };
+}
+function normalizeTask(t){
+  return {
+    id: String(t.id || uid()),
+    title: String(t.title || "Untitled"),
+    notes: String(t.notes || ""),
+    status: ["todo","doing","done"].includes(t.status) ? t.status : "todo",
+    priority: ["low","med","high"].includes(t.priority) ? t.priority : "med",
+    due: /^\d{4}-\d{2}-\d{2}$/.test(t.due || "") ? t.due : "",
+    tags: Array.isArray(t.tags) ? t.tags.map(String) : [],
+    order: Number.isFinite(+t.order) ? +t.order : Date.now(),
+    pomos: +t.pomos || 0,
+    createdAt: t.createdAt || Date.now(),
+    doneAt: t.doneAt || null
+  };
+}
+function loadState(){
+  try{
+    const raw = localStorage.getItem(KEY);
+    if(!raw) return seed();
+    const p = JSON.parse(raw);
+    return {
+      tasks: Array.isArray(p.tasks) ? p.tasks.map(normalizeTask) : [],
+      stats: { sessions: +(p.stats?.sessions) || 0, minutes: +(p.stats?.minutes) || 0 }
+    };
+  }catch(e){ console.warn("Bad state, resetting", e); return seed(); }
+}
+function seed(){
+  const s = defaultState();
+  const t = todayISO(), tm = addDays(t, 1), nx = addDays(t, 3);
+  s.tasks = [
+    normalizeTask({ title:"Plan the week's top 3 outcomes", status:"todo", priority:"high", due:t, tags:["planning"], order:1 }),
+    normalizeTask({ title:"Deep work: design pass", status:"doing", priority:"med", due:t, tags:["focus"], order:2 }),
+    normalizeTask({ title:"Reply to the client thread", status:"todo", priority:"med", due:tm, order:3 }),
+    normalizeTask({ title:"Review the project roadmap", status:"todo", priority:"low", due:nx, tags:["strategy"], order:4 }),
+    normalizeTask({ title:"Set up the dev environment", status:"done", priority:"low", order:5, doneAt:Date.now() })
+  ];
+  return s;
+}
+let state = loadState();
+
+let saveTimer = null;
+function save(){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(flush, 140);
+}
+function flush(){
+  try{ localStorage.setItem(KEY, JSON.stringify(state)); }
+  catch(e){ toast("⚠ Storage full or blocked"); }
+}
+window.addEventListener("beforeunload", flush);
+document.addEventListener("visibilitychange", () => { if(document.hidden) flush(); });
+// multi-tab sync
+window.addEventListener("storage", e => { if(e.key === KEY){ state = loadState(); renderAll(); } });
+
+/* single mutation path → save + render everything */
+function commit(){ save(); renderAll(); }
+
+/* ───── Task CRUD ───── */
+const getTask = id => state.tasks.find(t => t.id === id);
+
+function addTask(data){
+  const maxOrder = state.tasks.reduce((m,t) => Math.max(m, t.order), 0);
+  state.tasks.push(normalizeTask({ ...data, order: maxOrder + 1 }));
+}
+function updateTask(id, patch){
+  const t = getTask(id); if(!t) return;
+  Object.assign(t, patch);
+  if(patch.status !== undefined)
+    t.doneAt = patch.status === "done" ? (t.doneAt || Date.now()) : null;
+}
+function deleteTask(id){
+  const t = getTask(id); if(!t) return;
+  if(!confirm(`Delete “${t.title}”?`)) return;
+  state.tasks = state.tasks.filter(x => x.id !== id);
+  if(pomo.taskId === id) pomo.taskId = "";
+  commit();
+  toast("Task deleted");
+}
+function toggleDone(id){
+  const t = getTask(id); if(!t) return;
+  updateTask(id, { status: t.status === "done" ? "todo" : "done" });
+  commit();
+}
+
+/* ───── Date helpers (string-based, TZ-safe) ───── */
+function todayISO(){ return localISO(new Date()); }
+function localISO(d){
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+}
+function parseISO(iso){ const [y,m,d] = iso.split("-").map(Number); return new Date(y, m-1, d); }
+function addDays(iso, n){ const d = parseISO(iso); d.setDate(d.getDate()+n); return localISO(d); }
+function fmtShort(iso){ return iso ? parseISO(iso).toLocaleDateString(undefined,{month:"short",day:"numeric"}) : ""; }
+function cmpDue(a,b){
+  if(!a.due && !b.due) return a.order - b.order;
+  if(!a.due) return 1; if(!b.due) return -1;
+  return a.due.localeCompare(b.due) || a.order - b.order;
+}
+
+/* ════════════════════════════════════════════════
+   NAVIGATION
+   ════════════════════════════════════════════════ */
+let activeView = "dashboard";
+function setView(v){
+  activeView = v;
+  $$(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.view === v));
+  $$(".view").forEach(s => s.classList.toggle("active", s.id === "view-" + v));
+  $("#page-title").textContent = PAGES[v][0];
+  $("#page-sub").textContent = PAGES[v][1];
+  renderAll();
+}
+$("#nav").addEventListener("click", e => {
+  const b = e.target.closest(".nav-btn"); if(b) setView(b.dataset.view);
+});
+
+/* ════════════════════════════════════════════════
+   RENDER — every view rebuilt from state
+   ════════════════════════════════════════════════ */
+function renderAll(){
+  renderBadges();
+  if(activeView === "dashboard") renderDashboard();
+  if(activeView === "kanban")    renderKanban();
+  if(activeView === "calendar")  renderCalendar();
+  if(activeView === "todo")      renderTodo();
+  if(activeView === "pomodoro")  renderPomoSidebar();
+}
+function renderBadges(){
+  const open = state.tasks.filter(t => t.status !== "done").length;
+  $("#nb-kanban").textContent = state.tasks.length;
+  $("#nb-todo").textContent   = open;
+  $("#ms-sessions").textContent = state.stats.sessions;
+  $("#ms-min").textContent      = state.stats.minutes;
+}
+
+/* priority + due meta chips */
+function metaChips(t){
+  let out = `<span class="pri pri-${t.priority}">${t.priority}</span>`;
+  if(t.due){
+    const od = t.status !== "done" && t.due < todayISO();
+    out += `<span class="pill ${od?"overdue":""}">⏱ ${fmtShort(t.due)}</span>`;
+  }
+  if(t.pomos) out += `<span class="pill">◉ ${t.pomos}</span>`;
+  t.tags.forEach(tag => out += `<span class="pill">#${esc(tag)}</span>`);
+  return out;
+}
+
+/* ── Dashboard ── */
+function renderDashboard(){
+  const done = state.tasks.filter(t => t.status === "done").length;
+  const open = state.tasks.length - done;
+  const today = todayISO();
+  $("#d-open").textContent  = open;
+  $("#d-done").textContent  = done;
+  $("#d-focus").textContent = state.stats.minutes;
+  $("#d-today-label").textContent = fmtShort(today);
+
+  const todayTasks = state.tasks.filter(t => t.due === today && t.status !== "done").sort(cmpDue);
+  $("#d-today").textContent = todayTasks.length;
+  const soonEnd = addDays(today, 7);
+  const soon = state.tasks
+    .filter(t => t.due && t.due > today && t.due <= soonEnd && t.status !== "done")
+    .sort(cmpDue).slice(0,7);
+
+  $("#d-today-list").innerHTML = todayTasks.length
+    ? `<div class="task-list">${todayTasks.map(dashRow).join("")}</div>`
+    : `<div class="empty">Nothing due today. Enjoy the calm. ☕</div>`;
+  $("#d-soon-list").innerHTML = soon.length
+    ? `<div class="task-list">${soon.map(dashRow).join("")}</div>`
+    : `<div class="empty">No deadlines coming up.</div>`;
+}
+function dashRow(t){
+  return `<div class="task-row" data-edit="${t.id}" style="cursor:pointer">
+    <div class="tt ${t.status==="done"?"done":""}">${esc(t.title)}</div>
+    <div style="display:flex;gap:.4rem;align-items:center">${metaChips(t)}</div>
+  </div>`;
+}
+
+/* ── Kanban ── */
+const COLS = [["todo","To Do"],["doing","Doing"],["done","Done"]];
+function renderKanban(){
+  $("#kanban").innerHTML = COLS.map(([st,label]) => {
+    const cards = state.tasks.filter(t => t.status === st).sort((a,b) => a.order - b.order);
+    return `<section class="kcol" data-col="${st}">
+      <div class="kcol-head">
+        <div class="kcol-title"><span class="dot ${st}"></span>${label}<span class="pill">${cards.length}</span></div>
+        <button class="icon-btn" data-add="${st}">＋</button>
+      </div>
+      <div class="kcards" data-col="${st}">
+        ${cards.length ? cards.map(kCard).join("") : `<div class="empty">Drop tasks here</div>`}
+      </div>
+    </section>`;
+  }).join("");
+}
+function kCard(t){
+  return `<article class="kcard" draggable="true" data-id="${t.id}">
+    <div class="kacts">
+      <button class="icon-btn" data-edit="${t.id}" title="Edit">✎</button>
+      <button class="icon-btn" data-del="${t.id}" title="Delete">×</button>
+    </div>
+    <div class="kt ${t.status==="done"?"done":""}">${esc(t.title)}</div>
+    ${t.notes ? `<div class="muted" style="font-size:.8rem;margin-bottom:.5rem">${esc(t.notes)}</div>` : ""}
+    <div class="kmeta">${metaChips(t)}</div>
+  </article>`;
+}
+
+/* ── Calendar ── */
+let calCursor = new Date(); calCursor.setDate(1);
+function renderCalendar(){
+  const y = calCursor.getFullYear(), m = calCursor.getMonth();
+  $("#cal-title").textContent = calCursor.toLocaleDateString(undefined,{month:"long",year:"numeric"});
+  const first = new Date(y, m, 1);
+  const start = new Date(first); start.setDate(1 - first.getDay());
+  const today = todayISO();
+  const WD = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  let html = WD.map(d => `<div class="cal-wd">${d}</div>`).join("");
+
+  for(let i=0;i<42;i++){
+    const d = new Date(start); d.setDate(start.getDate()+i);
+    const iso = localISO(d);
+    const out = d.getMonth() !== m;
+    const items = state.tasks.filter(t => t.due === iso).sort(cmpDue);
+    const chips = items.slice(0,3).map(t =>
+      `<div class="cal-chip" data-edit="${t.id}" style="border-left-color:var(--p-${t.priority});${t.status==="done"?"opacity:.5;text-decoration:line-through":""}" title="${esc(t.title)}">${esc(t.title)}</div>`
+    ).join("");
+    const more = items.length > 3 ? `<div class="muted" style="font-size:.68rem">+${items.length-3} more</div>` : "";
+    html += `<div class="cal-cell ${out?"out":""} ${iso===today?"today":""}" data-day="${iso}">
+      <span class="cal-num">${d.getDate()}</span>${chips}${more}
+    </div>`;
+  }
+  $("#cal-grid").innerHTML = html;
+}
+$("#cal-prev").onclick  = () => { calCursor.setMonth(calCursor.getMonth()-1); renderCalendar(); };
+$("#cal-next").onclick  = () => { calCursor.setMonth(calCursor.getMonth()+1); renderCalendar(); };
+$("#cal-today").onclick = () => { calCursor = new Date(); calCursor.setDate(1); renderCalendar(); };
+
+/* ── To-Do ── */
+function todoSorted(){
+  return [...state.tasks].sort((a,b) => {
+    if((a.status==="done") !== (b.status==="done")) return a.status==="done" ? 1 : -1;
+    return a.order - b.order;
+  });
+}
+function renderTodo(){
+  const tasks = todoSorted();
+  $("#todo-list").innerHTML = tasks.length
+    ? tasks.map(todoItem).join("")
+    : `<div class="empty">No tasks yet — add your first one above.</div>`;
+}
+function todoItem(t){
+  return `<div class="todo-item ${t.status==="done"?"done":""}" draggable="true" data-id="${t.id}">
+    <span class="drag-handle" title="Drag to reorder">⠿</span>
+    <div class="check" data-check="${t.id}"></div>
+    <div class="tt">${esc(t.title)}</div>
+    ${metaChips(t)}
+    <button class="icon-btn" data-edit="${t.id}" title="Edit">✎</button>
+    <button class="icon-btn" data-del="${t.id}" title="Delete">×</button>
+  </div>`;
+}
+$("#quick-add-form").addEventListener("submit", e => {
+  e.preventDefault();
+  const title = $("#qa-title").value.trim(); if(!title) return;
+  addTask({ title, priority: $("#qa-priority").value, due: $("#qa-due").value, status:"todo" });
+  $("#qa-title").value = ""; $("#qa-due").value = "";
+  commit();
+});
+
+/* ════════════════════════════════════════════════
+   DRAG & DROP — Kanban (between columns) + To-Do (reorder)
+   ════════════════════════════════════════════════ */
+let dragId = null;
+
+document.addEventListener("dragstart", e => {
+  const card = e.target.closest(".kcard, .todo-item");
+  if(!card) return;
+  dragId = card.dataset.id;
+  e.dataTransfer.effectAllowed = "move";
+  e.dataTransfer.setData("text/plain", dragId);          // required for Firefox
+  requestAnimationFrame(() => card.classList.add("dragging"));
+});
+document.addEventListener("dragend", () => {
+  $$(".dragging").forEach(el => el.classList.remove("dragging"));
+  $$(".over").forEach(el => el.classList.remove("over"));
+  dragId = null;
+});
+
+/* Kanban drop zones */
+document.addEventListener("dragover", e => {
+  const col = e.target.closest(".kcol");
+  if(col){ e.preventDefault(); e.dataTransfer.dropEffect = "move"; col.classList.add("over"); }
+  if(e.target.closest(".todo-item")) e.preventDefault();
+});
+document.addEventListener("dragleave", e => {
+  const col = e.target.closest(".kcol");
+  if(col && !col.contains(e.relatedTarget)) col.classList.remove("over");
+});
+document.addEventListener("drop", e => {
+  const id = dragId || e.dataTransfer.getData("text/plain");
+  if(!id) return;
+
+  // Kanban: change status + put at bottom of target column
+  const col = e.target.closest(".kcol");
+  if(col){
+    e.preventDefault();
+    const status = col.dataset.col;
+    const t = getTask(id);
+    if(t && t.status !== status){
+      const maxOrder = state.tasks.filter(x => x.status === status).reduce((m,x)=>Math.max(m,x.order),0);
+      updateTask(id, { status, order: maxOrder + 1 });
+      commit();
+    }
+    return;
+  }
+
+  // To-Do reorder: drop over another item → reindex the visible order
+  const target = e.target.closest(".todo-item");
+  if(target && target.dataset.id !== id){
+    e.preventDefault();
+    const ids = todoSorted().map(t => t.id);
+    const from = ids.indexOf(id), to = ids.indexOf(target.dataset.id);
+    if(from < 0 || to < 0) return;
+    ids.splice(to, 0, ids.splice(from, 1)[0]);
+    ids.forEach((tid,i) => { const t = getTask(tid); if(t) t.order = i + 1; });
+    commit();
+  }
+});
+
+/* ════════════════════════════════════════════════
+   POMODORO — drift-corrected timer + WebAudio chime
+   ════════════════════════════════════════════════ */
+const pomo = { mode:"work", remaining:WORK, running:false, taskId:"", tick:null, last:0 };
+let audioCtx = null;
+
+function ensureAudio(){
+  try{
+    if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if(audioCtx.state === "suspended") audioCtx.resume();
+  }catch(e){}
+}
+function chime(){
+  ensureAudio(); if(!audioCtx) return;
+  const now = audioCtx.currentTime;
+  [523.25, 659.25, 783.99].forEach((f,i) => {     // C5 – E5 – G5 soft arpeggio
+    const t = now + i * 0.16;
+    const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+    osc.type = "sine"; osc.frequency.value = f;
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.linearRampToValueAtTime(0.18, t + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 1.6);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(t); osc.stop(t + 1.7);
+  });
+}
+function pomoStart(){
+  if(pomo.running) return;
+  ensureAudio();
+  pomo.running = true;
+  pomo.last = Date.now();
+  pomo.tick = setInterval(() => {
+    const now = Date.now();
+    const elapsed = Math.round((now - pomo.last) / 1000);
+    if(elapsed >= 1){
+      pomo.last = now;
+      pomo.remaining = Math.max(0, pomo.remaining - elapsed);
+      if(pomo.remaining <= 0) pomoComplete();
+      else renderPomo();
+    }
+  }, 250);
+  renderPomo();
+}
+function pomoPause(){ pomo.running = false; clearInterval(pomo.tick); pomo.tick = null; renderPomo(); }
+function pomoReset(){ pomoPause(); pomo.mode = "work"; pomo.remaining = WORK; renderPomo(); }
+function pomoSkip(){ pomoComplete(false); }
+function pomoComplete(count = true){
+  chime();
+  if(pomo.mode === "work"){
+    if(count){
+      state.stats.sessions++; state.stats.minutes += 25;
+      const t = getTask(pomo.taskId);
+      if(t){ t.pomos = (t.pomos || 0) + 1; }
+      save();
+    }
+    pomo.mode = "break"; pomo.remaining = BREAK;
+    toast("Focus block done — take a break ☕");
+  } else {
+    pomo.mode = "work"; pomo.remaining = WORK;
+    toast("Break over — back to it ⚡");
+  }
+  pomo.last = Date.now();
+  renderPomo(); renderBadges();
+}
+const C = 2 * Math.PI * 90;  // ring circumference
+function renderPomo(){
+  if(activeView !== "pomodoro") return;
+  const total = pomo.mode === "work" ? WORK : BREAK;
+  const m = String(Math.floor(pomo.remaining/60)).padStart(2,"0");
+  const s = String(pomo.remaining%60).padStart(2,"0");
+  $("#pomo-time").textContent = `${m}:${s}`;
+  $("#pomo-toggle").textContent = pomo.running ? "❚❚" : "▶";
+  $("#pomo-mode").textContent = pomo.mode === "work" ? "Focus" : "Break";
+  $("#pomo-mode").classList.toggle("break", pomo.mode === "break");
+  const ring = $("#ring-fg");
+  ring.classList.toggle("break", pomo.mode === "break");
+  ring.style.strokeDasharray = C;
+  ring.style.strokeDashoffset = C * (1 - pomo.remaining / total);
+  const t = getTask(pomo.taskId);
+  $("#pomo-sub").textContent = t ? `On: ${t.title}` : (pomo.running ? "Stay focused" : "Pick a task to focus on");
+}
+function renderPomoSidebar(){
+  const sel = $("#pomo-task");
+  const prev = pomo.taskId;
+  const open = state.tasks.filter(t => t.status !== "done").sort(cmpDue);
+  sel.innerHTML = `<option value="">No specific task</option>` +
+    open.map(t => `<option value="${t.id}">${esc(t.title)}</option>`).join("");
+  if(prev && open.some(t => t.id === prev)) sel.value = prev; else pomo.taskId = sel.value;
+  $("#ps-sessions").textContent = state.stats.sessions;
+  $("#ps-min").textContent = state.stats.minutes;
+  renderPomo();
+}
+$("#pomo-toggle").onclick = () => pomo.running ? pomoPause() : pomoStart();
+$("#pomo-reset").onclick  = pomoReset;
+$("#pomo-skip").onclick   = pomoSkip;
+$("#pomo-task").onchange  = e => { pomo.taskId = e.target.value; renderPomo(); };
+
+/* ════════════════════════════════════════════════
+   MODAL (create / edit task)
+   ════════════════════════════════════════════════ */
+const overlay = $("#overlay");
+function openModal(opts = {}){
+  const t = opts.id ? getTask(opts.id) : null;
+  $("#modal-title").textContent = t ? "Edit Task" : "New Task";
+  $("#f-id").value       = t?.id || "";
+  $("#f-title").value    = t?.title || "";
+  $("#f-notes").value    = t?.notes || "";
+  $("#f-status").value   = t?.status || opts.status || "todo";
+  $("#f-priority").value = t?.priority || "med";
+  $("#f-due").value      = t?.due || opts.due || "";
+  $("#f-tags").value     = t?.tags?.join(", ") || "";
+  overlay.classList.add("active");
+  setTimeout(() => $("#f-title").focus(), 60);
+}
+function closeModal(){ overlay.classList.remove("active"); }
+$("#new-task-btn").onclick = () => openModal();
+overlay.addEventListener("click", e => {
+  if(e.target === overlay || e.target.closest("[data-close]")) closeModal();
+});
+$("#task-form").addEventListener("submit", e => {
+  e.preventDefault();
+  const id = $("#f-id").value;
+  const data = {
+    title: $("#f-title").value.trim(),
+    notes: $("#f-notes").value.trim(),
+    status: $("#f-status").value,
+    priority: $("#f-priority").value,
+    due: $("#f-due").value,
+    tags: $("#f-tags").value.split(",").map(s => s.trim()).filter(Boolean)
+  };
+  if(!data.title) return;
+  if(id) updateTask(id, data);
+  else   addTask(data);
+  closeModal(); commit();
+  toast(id ? "Task updated" : "Task added");
+});
+
+/* ════════════════════════════════════════════════
+   GLOBAL CLICK DELEGATION (edit / delete / add / check / day)
+   ════════════════════════════════════════════════ */
+document.addEventListener("click", e => {
+  const edit = e.target.closest("[data-edit]");
+  if(edit){ openModal({ id: edit.dataset.edit }); return; }
+
+  const del = e.target.closest("[data-del]");
+  if(del){ deleteTask(del.dataset.del); return; }
+
+  const add = e.target.closest("[data-add]");
+  if(add){ openModal({ status: add.dataset.add }); return; }
+
+  const check = e.target.closest("[data-check]");
+  if(check){ toggleDone(check.dataset.check); return; }
+
+  const day = e.target.closest("[data-day]");
+  if(day && !e.target.closest("[data-edit]")){ openModal({ due: day.dataset.day }); return; }
+});
+
+/* keyboard shortcut: N = new task, Esc = close */
+document.addEventListener("keydown", e => {
+  if(e.key === "Escape") closeModal();
+  if(e.key.toLowerCase() === "n" && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) && !overlay.classList.contains("active")){
+    e.preventDefault(); openModal();
+  }
+});
+
+/* ───── Export ───── */
+$("#export-btn").onclick = () => {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type:"application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "flux-export.json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast("Data exported");
+};
+
+/* ───── Toast ───── */
+function toast(msg){
+  const el = document.createElement("div");
+  el.className = "toast"; el.textContent = msg;
+  $("#toast-wrap").appendChild(el);
+  setTimeout(() => { el.style.transition = "opacity .3s, transform .3s"; el.style.opacity = "0"; el.style.transform = "translateY(10px)"; }, 2200);
+  setTimeout(() => el.remove(), 2600);
+}
+
+/* ───── Boot ───── */
+setView("dashboard");
+</script>
+</body>
+</html>

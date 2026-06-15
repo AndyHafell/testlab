@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Physics Destruction Sandbox</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #11131a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; user-select: none; }
+  #canvas { display: block; position: absolute; top: 0; left: 0; cursor: crosshair; }
+
+  #ui {
+    position: absolute; top: 0; left: 0; padding: 10px;
+    display: flex; flex-direction: column; gap: 8px; z-index: 10;
+    max-height: 100vh; overflow-y: auto; pointer-events: none;
+  }
+  .panel {
+    background: rgba(20, 23, 32, 0.82);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px; padding: 8px 10px;
+    backdrop-filter: blur(8px); pointer-events: auto;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+  }
+  .panel h3 {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 1.2px;
+    color: #6f7891; margin-bottom: 6px; font-weight: 700;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 5px; }
+  button {
+    background: #2a2f3e; color: #d4d9e6; border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 7px; padding: 6px 9px; font-size: 12px; cursor: pointer;
+    transition: all 0.12s; font-weight: 600; white-space: nowrap;
+  }
+  button:hover { background: #353c50; transform: translateY(-1px); }
+  button:active { transform: translateY(0); }
+  button.active {
+    background: linear-gradient(135deg, #ff7a3d, #ff4d6d);
+    color: #fff; border-color: transparent;
+    box-shadow: 0 0 14px rgba(255,90,90,0.5);
+  }
+  button.tool { min-width: 0; }
+  .icon { font-size: 14px; margin-right: 3px; }
+
+  #help {
+    position: absolute; bottom: 10px; left: 10px; z-index: 10;
+    font-size: 11px; color: #8b93a8; background: rgba(20,23,32,0.7);
+    padding: 6px 12px; border-radius: 8px; pointer-events: none;
+  }
+  #help b { color: #ffae6e; }
+
+  #count {
+    position: absolute; top: 10px; right: 10px; z-index: 10;
+    font-size: 11px; color: #8b93a8; background: rgba(20,23,32,0.7);
+    padding: 6px 12px; border-radius: 8px; pointer-events: none;
+  }
+
+  .toggle-row label {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; color: #b6bdcf; cursor: pointer;
+  }
+  input[type=range] { width: 90px; accent-color: #ff7a3d; cursor: pointer; }
+  .slabel { font-size: 10px; color: #8b93a8; display: block; margin-bottom: 2px; }
+
+  @media (max-width: 640px) {
+    #ui { padding: 6px; gap: 6px; }
+    button { padding: 5px 7px; font-size: 11px; }
+    #help { display: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<div id="ui">
+  <div class="panel">
+    <h3>Tool</h3>
+    <div class="row" id="toolRow">
+      <button class="tool active" data-tool="drag"><span class="icon">✋</span>Drag</button>
+      <button class="tool" data-tool="bomb"><span class="icon">💣</span>Bomb</button>
+      <button class="tool" data-tool="blackhole"><span class="icon">🕳️</span>Black Hole</button>
+      <button class="tool" data-tool="wind"><span class="icon">💨</span>Wind</button>
+      <button class="tool" data-tool="antigrav"><span class="icon">🎈</span>Anti-Grav</button>
+      <button class="tool" data-tool="delete"><span class="icon">✖</span>Delete</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>Spawn Object</h3>
+    <div class="row">
+      <button data-spawn="crate">📦 Crate</button>
+      <button data-spawn="ball">⚽ Ball</button>
+      <button data-spawn="plank">▬ Plank</button>
+      <button data-spawn="barrel">🛢️ Barrel</button>
+      <button data-spawn="ragdoll">🚶 Ragdoll</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>Presets</h3>
+    <div class="row">
+      <button data-preset="wall">🧱 Brick Wall</button>
+      <button data-preset="jenga">🗼 Jenga Tower</button>
+      <button data-preset="pyramid">🔺 Pyramid</button>
+      <button data-preset="crowd">👥 Ragdoll Crowd</button>
+      <button data-preset="barrels">🛢️ Barrel Stack</button>
+    </div>
+  </div>
+
+  <div class="panel toggle-row">
+    <h3>Chaos Controls</h3>
+    <div class="row" style="align-items:center; gap:10px;">
+      <label><input type="checkbox" id="slomoChk"> Slow-Mo</label>
+      <button id="resetBtn">🔄 Reset</button>
+    </div>
+    <div class="row" style="margin-top:8px; gap:14px;">
+      <div>
+        <span class="slabel">Gravity</span>
+        <input type="range" id="gravSlider" min="-1.5" max="2.5" step="0.1" value="1">
+      </div>
+      <div>
+        <span class="slabel">Blast Power</span>
+        <input type="range" id="blastSlider" min="0.5" max="3" step="0.1" value="1.3">
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="count">Bodies: 0</div>
+<div id="help">
+  <b>Drag</b> to fling · <b>Click</b> bomb/black-hole/wind · <b>Hold</b> field tools · <b>Spacebar</b> = Slow-Mo · <b>R</b> = Reset
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+<script>
+const {
+  Engine, Render, Runner, World, Bodies, Body, Composite, Constraint,
+  Mouse, MouseConstraint, Events, Vector, Query, Common
+} = Matter;
+
+// ---------- Setup ----------
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let W = window.innerWidth, H = window.innerHeight;
+
+const engine = Engine.create();
+engine.world.gravity.y = 1;
+engine.positionIterations = 8;
+engine.velocityIterations = 8;
+const world = engine.world;
+
+const runner = Runner.create();
+Runner.run(runner, engine);
+
+// ---------- State ----------
+let currentTool = 'drag';
+let baseGravity = 1;
+let blastPower = 1.3;
+let slowmo = false;
+let timeScaleTarget = 1;
+let floor, leftWall, rightWall, ceiling;
+const FLOOR_THICK = 80;
+
+// ---------- Resize ----------
+function resize() {
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W * devicePixelRatio;
+  canvas.height = H * devicePixelRatio;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  buildBounds();
+}
+function buildBounds() {
+  [floor, leftWall, rightWall, ceiling].forEach(b => { if (b) World.remove(world, b); });
+  const opt = { isStatic: true, restitution: 0.3, friction: 0.9, render: false };
+  floor = Bodies.rectangle(W/2, H - FLOOR_THICK/2, W*2, FLOOR_THICK, opt);
+  leftWall = Bodies.rectangle(-30, H/2, 60, H*3, opt);
+  rightWall = Bodies.rectangle(W+30, H/2, 60, H*3, opt);
+  ceiling = Bodies.rectangle(W/2, -H, W*2, 60, opt);
+  World.add(world, [floor, leftWall, rightWall, ceiling]);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ---------- Color palettes ----------
+const PAL = {
+  crate:   ['#c98a3b','#b3742c','#a86426'],
+  ball:    ['#5ab6ff','#ff6b9d','#6bff9d','#ffd166','#c77dff'],
+  plank:   ['#d9a66b','#c79256'],
+  barrel:  ['#e74c3c','#c0392b'],
+  brick:   ['#b5503a','#a3472f','#c0593f'],
+  jenga:   ['#e0b06a','#d4a25c','#cd9750'],
+  skin:    '#f1c27d',
+  cloth:   ['#3498db','#2ecc71','#9b59b6','#e67e22','#e74c3c','#1abc9c']
+};
+const pick = a => a[Math.floor(Math.random()*a.length)];
+
+// ---------- Body factory ----------
+let bodyId = 0;
+function tagBody(body, info) {
+  body.plugin = Object.assign({ kind: 'generic', color: '#999', stroke: 'rgba(0,0,0,0.25)' }, info);
+  return body;
+}
+
+function makeCrate(x, y, size = 44) {
+  const c = pick(PAL.crate);
+  const b = Bodies.rectangle(x, y, size, size, { restitution: 0.15, friction: 0.6, density: 0.0014 });
+  return tagBody(b, { kind: 'crate', color: c, stroke: 'rgba(0,0,0,0.3)', detail: 'crate', size });
+}
+function makeBall(x, y, r = 22) {
+  const c = pick(PAL.ball);
+  const b = Bodies.circle(x, y, r, { restitution: 0.65, friction: 0.3, density: 0.0012 });
+  return tagBody(b, { kind: 'ball', color: c, stroke: 'rgba(0,0,0,0.2)' });
+}
+function makePlank(x, y, w = 110, h = 22) {
+  const c = pick(PAL.plank);
+  const b = Bodies.rectangle(x, y, w, h, { restitution: 0.1, friction: 0.7, density: 0.001 });
+  return tagBody(b, { kind: 'plank', color: c, stroke: 'rgba(0,0,0,0.3)', detail: 'wood' });
+}
+function makeBarrel(x, y) {
+  const b = Bodies.rectangle(x, y, 40, 56, { restitution: 0.2, friction: 0.5, density: 0.0013, chamfer: { radius: 8 } });
+  return tagBody(b, { kind: 'barrel', color: pick(PAL.barrel), stroke: 'rgba(0,0,0,0.35)', explosive: true });
+}
+function makeBrick(x, y, w = 60, h = 28) {
+  const b = Bodies.rectangle(x, y, w, h, { restitution: 0.05, friction: 0.85, density: 0.0018 });
+  return tagBody(b, { kind: 'brick', color: pick(PAL.brick), stroke: 'rgba(0,0,0,0.35)', detail: 'brick', size: Math.min(w,h) });
+}
+function makeJengaBlock(x, y, w, h) {
+  const b = Bodies.rectangle(x, y, w, h, { restitution: 0.02, friction: 0.6, density: 0.0015 });
+  return tagBody(b, { kind: 'jenga', color: pick(PAL.jenga), stroke: 'rgba(0,0,0,0.25)', detail: 'wood' });
+}
+
+// ---------- Ragdoll ----------
+function makeRagdoll(x, y, scale = 1) {
+  const group = Body.nextGroup(true);
+  const cloth = pick(PAL.cloth);
+  const s = scale;
+  const def = { collisionFilter: { group }, friction: 0.6, restitution: 0.1, density: 0.0012 };
+
+  const head = tagBody(Bodies.circle(x, y - 38*s, 14*s, def), { kind:'rag', color: PAL.skin, stroke:'rgba(0,0,0,0.25)' });
+  const torso = tagBody(Bodies.rectangle(x, y, 24*s, 44*s, { ...def, chamfer:{radius:6} }), { kind:'rag', color: cloth, stroke:'rgba(0,0,0,0.3)' });
+  const upperLArm = tagBody(Bodies.rectangle(x - 18*s, y - 8*s, 10*s, 28*s, def), { kind:'rag', color: cloth, stroke:'rgba(0,0,0,0.3)' });
+  const lowerLArm = tagBody(Bodies.rectangle(x - 18*s, y + 18*s, 9*s, 26*s, def), { kind:'rag', color: PAL.skin, stroke:'rgba(0,0,0,0.25)' });
+  const upperRArm = tagBody(Bodies.rectangle(x + 18*s, y - 8*s, 10*s, 28*s, def), { kind:'rag', color: cloth, stroke:'rgba(0,0,0,0.3)' });
+  const lowerRArm = tagBody(Bodies.rectangle(x + 18*s, y + 18*s, 9*s, 26*s, def), { kind:'rag', color: PAL.skin, stroke:'rgba(0,0,0,0.25)' });
+  const upperLLeg = tagBody(Bodies.rectangle(x - 8*s, y + 38*s, 12*s, 32*s, def), { kind:'rag', color:'#34495e', stroke:'rgba(0,0,0,0.3)' });
+  const lowerLLeg = tagBody(Bodies.rectangle(x - 8*s, y + 70*s, 10*s, 30*s, def), { kind:'rag', color:'#34495e', stroke:'rgba(0,0,0,0.3)' });
+  const upperRLeg = tagBody(Bodies.rectangle(x + 8*s, y + 38*s, 12*s, 32*s, def), { kind:'rag', color:'#34495e', stroke:'rgba(0,0,0,0.3)' });
+  const lowerRLeg = tagBody(Bodies.rectangle(x + 8*s, y + 70*s, 10*s, 30*s, def), { kind:'rag', color:'#34495e', stroke:'rgba(0,0,0,0.3)' });
+
+  const parts = [head,torso,upperLArm,lowerLArm,upperRArm,lowerRArm,upperLLeg,lowerLLeg,upperRLeg,lowerRLeg];
+  const joint = (a,b,ax,ay,bx,by,stiff=0.6) => Constraint.create({
+    bodyA:a, bodyB:b, pointA:{x:ax,y:ay}, pointB:{x:bx,y:by}, stiffness:stiff, length:0, render:{visible:false}
+  });
+  const joints = [
+    joint(head, torso, 0, 12*s, 0, -22*s),
+    joint(torso, upperLArm, -11*s, -20*s, 0, -13*s),
+    joint(upperLArm, lowerLArm, 0, 13*s, 0, -12*s),
+    joint(torso, upperRArm, 11*s, -20*s, 0, -13*s),
+    joint(upperRArm, lowerRArm, 0, 13*s, 0, -12*s),
+    joint(torso, upperLLeg, -8*s, 22*s, 0, -15*s),
+    joint(upperLLeg, lowerLLeg, 0, 15*s, 0, -14*s),
+    joint(torso, upperRLeg, 8*s, 22*s, 0, -15*s),
+    joint(upperRLeg, lowerRLeg, 0, 15*s, 0, -14*s),
+  ];
+  const comp = Composite.create();
+  Composite.add(comp, [...parts, ...joints]);
+  World.add(world, comp);
+  return comp;
+}
+
+// ---------- Spawn helpers ----------
+function addBody(b) { World.add(world, b); return b; }
+
+function spawnObject(type, x, y) {
+  switch(type) {
+    case 'crate': addBody(makeCrate(x, y)); break;
+    case 'ball': addBody(makeBall(x, y)); break;
+    case 'plank': addBody(makePlank(x, y)); break;
+    case 'barrel': addBody(makeBarrel(x, y)); break;
+    case 'ragdoll': makeRagdoll(x, y); break;
+  }
+}
+
+// ---------- Presets ----------
+function clearDynamic() {
+  Composite.allBodies(world).forEach(b => {
+    if (!b.isStatic) World.remove(world, b);
+  });
+  Composite.allComposites(world).forEach(c => World.remove(world, c));
+  particles.length = 0;
+}
+
+function presetWall() {
+  const bw = 60, bh = 28, cols = Math.min(12, Math.floor((W*0.5)/bw));
+  const rows = 9;
+  const startX = W/2 - (cols*bw)/2 + bw/2;
+  const baseY = H - FLOOR_THICK - bh/2;
+  for (let r = 0; r < rows; r++) {
+    const offset = (r % 2) * (bw/2);
+    const c = (r % 2) ? cols - 1 : cols;
+    for (let i = 0; i < c; i++) {
+      addBody(makeBrick(startX + i*bw + offset, baseY - r*bh, bw, bh));
+    }
+  }
+}
+
+function presetJenga() {
+  const bw = 120, bh = 26, gap = 2;
+  const layers = 14;
+  const cx = W/2;
+  const baseY = H - FLOOR_THICK - bh/2;
+  for (let l = 0; l < layers; l++) {
+    const y = baseY - l*bh;
+    if (l % 2 === 0) {
+      for (let i = -1; i <= 1; i++)
+        addBody(makeJengaBlock(cx + i*(bw/3 + gap), y, bw/3 - gap, bh));
+    } else {
+      for (let i = -1; i <= 1; i++)
+        addBody(makeJengaBlock(cx, y, bw, bh)), i = 99; // single rotated row
+      const block = makeJengaBlock(cx, y, bw, bh);
+      Body.setAngle(block, 0);
+      // rebuild as 3 cross blocks
+    }
+  }
+}
+// cleaner jenga
+function presetJengaClean() {
+  const len = 130, w = 26, h = 24;
+  const layers = 16;
+  const cx = W/2;
+  const baseY = H - FLOOR_THICK - h/2;
+  for (let l = 0; l < layers; l++) {
+    const y = baseY - l*h;
+    for (let i = -1; i <= 1; i++) {
+      if (l % 2 === 0)
+        addBody(makeJengaBlock(cx + i*(w+1), y, w, h));
+      else
+        addBody(makeJengaBlock(cx, y, len, h)), null;
+    }
+    if (l % 2 === 1) {
+      // remove dupes: just add one wide block & two more shifted in depth-illusion
+    }
+  }
+}
+
+function presetPyramid() {
+  const size = 46, rows = 8;
+  const baseY = H - FLOOR_THICK - size/2;
+  for (let r = 0; r < rows; r++) {
+    const n = rows - r;
+    const startX = W/2 - (n*size)/2 + size/2;
+    for (let i = 0; i < n; i++) {
+      addBody(makeCrate(startX + i*size, baseY - r*size, size - 2));
+    }
+  }
+}
+
+function presetCrowd() {
+  const n = 8;
+  for (let i = 0; i < n; i++) {
+    makeRagdoll(W/2 + (i - n/2) * 70 + Common.random(-10,10), H/2 - 100 + Common.random(-30,30), 0.95);
+  }
+}
+
+function presetBarrelStack() {
+  const cols = 5, rows = 4;
+  const bw = 44, bh = 60;
+  const startX = W/2 - (cols*bw)/2 + bw/2;
+  const baseY = H - FLOOR_THICK - bh/2;
+  for (let r = 0; r < rows; r++) {
+    for (let i = 0; i < cols - r; i++) {
+      addBody(makeBarrel(startX + i*bw + r*bw/2, baseY - r*bh*0.96));
+    }
+  }
+}
+
+// ---------- Particles ----------
+const particles = [];
+function spawnParticles(x, y, count, opts = {}) {
+  const { color = '#ffae6e', speed = 6, life = 40, size = 4, spread = Math.PI*2, dir = 0, gravity = 0.15 } = opts;
+  for (let i = 0; i < count; i++) {
+    const a = dir + (Math.random()-0.5)*spread;
+    const sp = speed * (0.4 + Math.random()*0.8);
+    particles.push({
+      x, y,
+      vx: Math.cos(a)*sp, vy: Math.sin(a)*sp,
+      life: life*(0.6+Math.random()*0.6), maxLife: life,
+      size: size*(0.5+Math.random()), color, gravity,
+      spin: (Math.random()-0.5)*0.3, rot: Math.random()*6
+    });
+  }
+}
+function updateParticles() {
+  for (let i = particles.length-1; i >= 0; i--) {
+    const p = particles[i];
+    p.vy += p.gravity;
+    p.vx *= 0.98; p.vy *= 0.98;
+    p.x += p.vx; p.y += p.vy;
+    p.rot += p.spin;
+    p.life--;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+// ---------- Screen shake ----------
+let shake = 0;
+function addShake(amt) { shake = Math.min(40, shake + amt); }
+
+// ---------- Audio (synth) ----------
+let actx = null;
+function initAudio() { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); }
+function master() {
+  if (!actx) return null;
+  return actx.destination;
+}
+function playExplosion(power = 1) {
+  if (!actx) return;
+  const t = actx.currentTime;
+  // noise burst
+  const dur = 0.55;
+  const buffer = actx.createBuffer(1, actx.sampleRate * dur, actx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    data[i] = (Math.random()*2-1) * Math.pow(1 - i/data.length, 2);
+  }
+  const noise = actx.createBufferSource(); noise.buffer = buffer;
+  const lp = actx.createBiquadFilter(); lp.type = 'lowpass';
+  lp.frequency.setValueAtTime(1800*power, t);
+  lp.frequency.exponentialRampToValueAtTime(120, t + dur);
+  const g = actx.createGain();
+  g.gain.setValueAtTime(0.6*power, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  noise.connect(lp); lp.connect(g); g.connect(actx.destination);
+  noise.start(t); noise.stop(t + dur);
+  // low boom
+  const osc = actx.createOscillator(); osc.type = 'sine';
+  osc.frequency.setValueAtTime(110*power, t);
+  osc.frequency.exponentialRampToValueAtTime(35, t + 0.4);
+  const og = actx.createGain();
+  og.gain.setValueAtTime(0.7*power, t);
+  og.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+  osc.connect(og); og.connect(actx.destination);
+  osc.start(t); osc.stop(t + 0.45);
+}
+let lastImpact = 0;
+function playImpact(strength) {
+  if (!actx) return;
+  const now = performance.now();
+  if (now - lastImpact < 22) return;
+  lastImpact = now;
+  const t = actx.currentTime;
+  const vol = Math.min(0.4, strength * 0.04);
+  if (vol < 0.01) return;
+  const dur = 0.08 + Math.min(0.12, strength*0.01);
+  const buffer = actx.createBuffer(1, actx.sampleRate * dur, actx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = (Math.random()*2-1) * (1 - i/data.length);
+  const src = actx.createBufferSource(); src.buffer = buffer;
+  const bp = actx.createBiquadFilter(); bp.type = 'bandpass';
+  bp.frequency.value = 200 + Math.random()*400;
+  bp.Q.value = 1.2;
+  const g = actx.createGain();
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  src.connect(bp); bp.connect(g); g.connect(actx.destination);
+  src.start(t); src.stop(t + dur);
+}
+
+// ---------- Explosion logic ----------
+function explode(x, y, radius = 220, force = 0.09) {
+  radius *= blastPower;
+  force *= blastPower;
+  addShake(14 * blastPower);
+  playExplosion(blastPower);
+  // visual
+  shockwaves.push({ x, y, r: 10, max: radius, life: 1 });
+  spawnParticles(x, y, 40, { color: '#ffd34d', speed: 11*blastPower, life: 35, size: 5, gravity: 0.1 });
+  spawnParticles(x, y, 30, { color: '#ff6b2b', speed: 8*blastPower, life: 45, size: 7, gravity: 0.05 });
+  spawnParticles(x, y, 24, { color: 'rgba(80,80,80,0.7)', speed: 4, life: 60, size: 10, gravity: -0.02 });
+
+  const bodies = Composite.allBodies(world);
+  const toBlow = [];
+  for (const b of bodies) {
+    if (b.isStatic) continue;
+    const d = Vector.magnitude(Vector.sub(b.position, { x, y }));
+    if (d < radius) {
+      const falloff = (1 - d/radius);
+      const dir = Vector.normalise(Vector.sub(b.position, { x, y }));
+      const mag = force * falloff * b.mass * (40 / Math.max(1, Math.sqrt(b.mass*800)));
+      Body.applyForce(b, b.position, Vector.mult(dir, force * falloff * (b.mass + 0.3)));
+      Body.setAngularVelocity(b, b.angularVelocity + (Math.random()-0.5)*falloff*0.5);
+      if (b.plugin && b.plugin.explosive && !b.plugin._detonating && d < radius*0.7) {
+        toBlow.push(b);
+      }
+    }
+  }
+  // chain reaction
+  toBlow.forEach((b, i) => {
+    b.plugin._detonating = true;
+    setTimeout(() => {
+      const p = b.position;
+      World.remove(world, b);
+      explode(p.x, p.y, 200, 0.085);
+    }, 80 + i*45);
+  });
+}
+
+const shockwaves = [];
+
+// ---------- Mouse / Tools ----------
+const mouse = Mouse.create(canvas);
+mouse.pixelRatio = devicePixelRatio;
+const mouseConstraint = MouseConstraint.create(engine, {
+  mouse,
+  constraint: { stiffness: 0.18, damping: 0.1, render: { visible: false } }
+});
+World.add(world, mouseConstraint);
+
+// Disable drag unless tool is 'drag'
+Events.on(mouseConstraint, 'startdrag', () => {});
+function updateDragEnabled() {
+  mouseConstraint.collisionFilter.mask = currentTool === 'drag' ? 0xFFFFFFFF : 0;
+}
+
+let pointerDown = false;
+let pointerPos = { x: 0, y: 0 };
+
+function getPointer(e) {
+  const rect = canvas.getBoundingClientRect();
+  const cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+  const cy = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+  return { x: cx, y: cy };
+}
+
+canvas.addEventListener('mousedown', onDown);
+canvas.addEventListener('touchstart', e => { e.preventDefault(); onDown(e); }, { passive: false });
+window.addEventListener('mouseup', onUp);
+window.addEventListener('touchend', onUp);
+canvas.addEventListener('mousemove', e => { pointerPos = getPointer(e); });
+canvas.addEventListener('touchmove', e => { pointerPos = getPointer(e); }, { passive: false });
+
+function onDown(e) {
+  initAudio();
+  pointerDown = true;
+  pointerPos = getPointer(e);
+  const p = pointerPos;
+  switch (currentTool) {
+    case 'bomb':
+      explode(p.x, p.y);
+      break;
+    case 'delete':
+      deleteAt(p.x, p.y);
+      break;
+  }
+}
+function onUp() { pointerDown = false; }
+
+function deleteAt(x, y) {
+  const bodies = Composite.allBodies(world).filter(b => !b.isStatic);
+  const found = Query.point(bodies, { x, y });
+  if (found.length) {
+    const b = found[0];
+    // remove parent composite if part of ragdoll
+    let removed = false;
+    Composite.allComposites(world).forEach(c => {
+      if (Composite.allBodies(c).includes(b)) { World.remove(world, c); removed = true; }
+    });
+    if (!removed) World.remove(world, b);
+    spawnParticles(x, y, 12, { color: b.plugin.color, speed: 4, life: 25, size: 4 });
+  }
+}
+
+// Continuous field tools
+function applyFields() {
+  if (!pointerDown) return;
+  const p = pointerPos;
+  const bodies = Composite.allBodies(world);
+  if (currentTool === 'blackhole') {
+    for (const b of bodies) {
+      if (b.isStatic) continue;
+      const diff = Vector.sub(p, b.position);
+      const d = Vector.magnitude(diff) + 30;
+      if (d < 600) {
+        const dir = Vector.normalise(diff);
+        const strength = 0.0009 * b.mass * (1 - d/600);
+        Body.applyForce(b, b.position, Vector.mult(dir, strength * 50));
+        Body.setAngularVelocity(b, b.angularVelocity + 0.02);
+        // swirl
+        const perp = { x: -dir.y, y: dir.x };
+        Body.applyForce(b, b.position, Vector.mult(perp, strength * 18));
+      }
+    }
+    if (Math.random() < 0.6) spawnParticles(p.x, p.y, 1, { color: '#b07dff', speed: 1, life: 20, size: 3, gravity: 0 });
+  } else if (currentTool === 'wind') {
+    for (const b of bodies) {
+      if (b.isStatic) continue;
+      const dy = Math.abs(b.position.y - p.y);
+      if (dy < 250 && b.position.x > p.x - 60) {
+        const fall = 1 - dy/250;
+        Body.applyForce(b, b.position, { x: 0.0018 * b.mass * fall, y: -0.0002 * b.mass * fall });
+      }
+    }
+    for (let i = 0; i < 2; i++)
+      spawnParticles(p.x, p.y + Common.random(-120,120), 1, { color: 'rgba(180,210,255,0.5)', speed: 8, life: 20, size: 3, spread: 0.3, dir: 0, gravity: 0 });
+  } else if (currentTool === 'antigrav') {
+    for (const b of bodies) {
+      if (b.isStatic) continue;
+      const d = Vector.magnitude(Vector.sub(b.position, p));
+      if (d < 320) {
+        const lift = (1 - d/320);
+        Body.applyForce(b, b.position, { x: (Math.random()-0.5)*0.0006*b.mass, y: -engine.world.gravity.y * 0.0028 * b.mass * lift * 1.4 });
+      }
+    }
+  }
+}
+
+// ---------- Collision sound + impact particles ----------
+Events.on(engine, 'collisionStart', (ev) => {
+  for (const pair of ev.pairs) {
+    const { bodyA, bodyB } = pair;
+    const rel = Vector.sub(bodyA.velocity, bodyB.velocity);
+    const speed = Vector.magnitude(rel);
+    if (speed > 4) {
+      playImpact(speed);
+      if (speed > 9) {
+        const c = pair.collision.supports[0] || bodyA.position;
+        const col = (bodyA.plugin && bodyA.plugin.color) || '#ccc';
+        spawnParticles(c.x, c.y, Math.min(8, Math.floor(speed/3)), {
+          color: 'rgba(255,255,255,0.6)', speed: speed*0.3, life: 15, size: 2.5, gravity: 0.2
+        });
+        if (speed > 18) addShake(Math.min(8, speed*0.2));
+      }
+    }
+  }
+});
+
+// ---------- UI wiring ----------
+document.querySelectorAll('.tool').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tool').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentTool = btn.dataset.tool;
+    updateDragEnabled();
+    canvas.style.cursor = currentTool === 'drag' ? 'grab' :
+                          currentTool === 'delete' ? 'not-allowed' : 'crosshair';
+  });
+});
+document.querySelectorAll('[data-spawn]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    initAudio();
+    spawnObject(btn.dataset.spawn, W/2 + Common.random(-60,60), 80);
+  });
+});
+document.querySelectorAll('[data-preset]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    initAudio();
+    clearDynamic();
+    switch (btn.dataset.preset) {
+      case 'wall': presetWall(); break;
+      case 'jenga': presetJengaClean(); break;
+      case 'pyramid': presetPyramid(); break;
+      case 'crowd': presetCrowd(); break;
+      case 'barrels': presetBarrelStack(); break;
+    }
+  });
+});
+document.getElementById('resetBtn').addEventListener('click', () => clearDynamic());
+document.getElementById('slomoChk').addEventListener('change', e => setSlomo(e.target.checked));
+document.getElementById('gravSlider').addEventListener('input', e => {
+  baseGravity = parseFloat(e.target.value);
+  engine.world.gravity.y = baseGravity;
+});
+document.getElementById('blastSlider').addEventListener('input', e => {
+  blastPower = parseFloat(e.target.value);
+});
+
+function setSlomo(on) {
+  slowmo = on;
+  timeScaleTarget = on ? 0.22 : 1;
+  document.getElementById('slomoChk').checked = on;
+}
+
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); setSlomo(!slowmo); }
+  if (e.key === 'r' || e.key === 'R') clearDynamic();
+});
+
+// ---------- Rendering ----------
+function drawBody(b) {
+  const p = b.plugin || {};
+  ctx.save();
+  ctx.translate(b.position.x, b.position.y);
+  ctx.rotate(b.angle);
+  ctx.fillStyle = p.color || '#888';
+  ctx.strokeStyle = p.stroke || 'rgba(0,0,0,0.3)';
+  ctx.lineWidth = 1.5;
+
+  if (b.circleRadius) {
+    const r = b.circleRadius;
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2);
+    ctx.fill(); ctx.stroke();
+    // highlight + spin marker
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.beginPath(); ctx.arc(-r*0.3, -r*0.3, r*0.4, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(r,0); ctx.stroke();
+  } else {
+    // polygon from vertices (local)
+    const verts = b.vertices;
+    ctx.beginPath();
+    ctx.moveTo(verts[0].x - b.position.x, verts[0].y - b.position.y);
+    for (let i = 1; i < verts.length; i++)
+      ctx.lineTo(verts[i].x - b.position.x, verts[i].y - b.position.y);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+
+    // surface detail
+    const bb = b.bounds;
+    const w = bb.max.x - bb.min.x, h = bb.max.y - bb.min.y;
+    if (p.detail === 'crate') {
+      ctx.strokeStyle = 'rgba(0,0,0,0.22)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-w/2, -h/2); ctx.lineTo(w/2, h/2);
+      ctx.moveTo(w/2, -h/2); ctx.lineTo(-w/2, h/2);
+      ctx.stroke();
+    } else if (p.detail === 'wood') {
+      ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+      ctx.lineWidth = 1;
+      for (let i = -1; i <= 1; i++) {
+        ctx.beginPath(); ctx.moveTo(-w/2+4, i*h*0.28); ctx.lineTo(w/2-4, i*h*0.28); ctx.stroke();
+      }
+    } else if (p.detail === 'brick') {
+      ctx.fillStyle = 'rgba(255,255,255,0.08)';
+      ctx.fillRect(-w/2, -h/2, w, h*0.35);
+    }
+    // top highlight
+    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+    ctx.fillRect(-w/2, -h/2, w, 3);
+  }
+  // barrel band
+  if (p.kind === 'barrel') {
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = 3;
+    const bb = b.bounds; const w = bb.max.x-bb.min.x;
+    ctx.beginPath(); ctx.moveTo(-w/2, -8); ctx.lineTo(w/2, -8);
+    ctx.moveTo(-w/2, 8); ctx.lineTo(w/2, 8); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,0,0.85)';
+    ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline='middle';
+    ctx.fillText('☢', 0, 0);
+  }
+  ctx.restore();
+}
+
+function drawRagdollFace(b) {
+  // draw a tiny face on head bodies
+  if (b.plugin && b.plugin.kind === 'rag' && b.circleRadius) {
+    ctx.save();
+    ctx.translate(b.position.x, b.position.y);
+    ctx.rotate(b.angle);
+    const r = b.circleRadius;
+    ctx.fillStyle = '#222';
+    ctx.beginPath(); ctx.arc(-r*0.35, -r*0.1, r*0.16, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(r*0.35, -r*0.1, r*0.16, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#222'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(0, r*0.25, r*0.3, 0.15*Math.PI, 0.85*Math.PI); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawConstraints() {
+  Composite.allConstraints(world).forEach(c => {
+    if (!c.bodyA || !c.bodyB || c === mouseConstraint.constraint) return;
+    const pa = c.bodyA.position, pb = c.bodyB.position;
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); ctx.stroke();
+  });
+}
+
+function render() {
+  // gradient bg
+  ctx.save();
+  if (shake > 0) {
+    ctx.translate((Math.random()-0.5)*shake, (Math.random()-0.5)*shake);
+    shake *= 0.86; if (shake < 0.3) shake = 0;
+  }
+
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#1a1f2e');
+  grad.addColorStop(1, '#0d0f16');
+  ctx.fillStyle = grad;
+  ctx.fillRect(-50, -50, W+100, H+100);
+
+  // floor
+  ctx.fillStyle = '#262b3a';
+  ctx.fillRect(-50, H - FLOOR_THICK, W+100, FLOOR_THICK+50);
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  ctx.fillRect(-50, H - FLOOR_THICK, W+100, 4);
+
+  // shockwaves
+  for (let i = shockwaves.length-1; i >= 0; i--) {
+    const s = shockwaves[i];
+    s.r += (s.max - s.r) * 0.18;
+    s.life -= 0.06;
+    ctx.strokeStyle = `rgba(255,180,80,${s.life*0.6})`;
+    ctx.lineWidth = 4 * s.life;
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.stroke();
+    if (s.life <= 0) shockwaves.splice(i, 1);
+  }
+
+  // bodies
+  drawConstraints();
+  const bodies = Composite.allBodies(world);
+  for (const b of bodies) {
+    if (b === floor || b === leftWall || b === rightWall || b === ceiling) continue;
+    drawBody(b);
+  }
+  for (const b of bodies) drawRagdollFace(b);
+
+  // particles
+  for (const p of particles) {
+    const alpha = Math.max(0, p.life / p.maxLife);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * (0.3 + alpha*0.7), 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // tool preview cursor
+  drawToolCursor();
+
+  ctx.restore();
+}
+
+function drawToolCursor() {
+  const p = pointerPos;
+  if (currentTool === 'bomb') {
+    ctx.strokeStyle = 'rgba(255,90,60,0.4)';
+    ctx.setLineDash([6,6]); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 220*blastPower, 0, Math.PI*2); ctx.stroke();
+    ctx.setLineDash([]);
+  } else if (currentTool === 'blackhole' && pointerDown) {
+    const g = ctx.createRadialGradient(p.x, p.y, 4, p.x, p.y, 80);
+    g.addColorStop(0, 'rgba(0,0,0,1)');
+    g.addColorStop(0.6, 'rgba(80,30,120,0.6)');
+    g.addColorStop(1, 'rgba(80,30,120,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 80, 0, Math.PI*2); ctx.fill();
+  } else if (currentTool === 'antigrav' && pointerDown) {
+    ctx.strokeStyle = 'rgba(120,220,255,0.3)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 320, 0, Math.PI*2); ctx.stroke();
+  }
+}
+
+// ---------- Main loop ----------
+let last = performance.now();
+function loop(now) {
+  // smooth timescale toward target
+  engine.timing.timeScale += (timeScaleTarget - engine.timing.timeScale) * 0.12;
+
+  applyFields();
+  updateParticles();
+  render();
+
+  document.getElementById('count').textContent =
+    'Bodies: ' + Composite.allBodies(world).filter(b => !b.isStatic).length +
+    (slowmo ? '  ·  ⏱ SLOW-MO' : '');
+
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// ---------- Initial scene ----------
+window.addEventListener('load', () => {
+  presetWall();
+  setTimeout(() => { presetBarrelStackOffset(); }, 50);
+});
+function presetBarrelStackOffset() {
+  // a couple barrels to the side for fun
+  for (let i = 0; i < 3; i++)
+    addBody(makeBarrel(W*0.18 + i*46, H - FLOOR_THICK - 30));
+  for (let i = 0; i < 4; i++)
+    addBody(makeCrate(W*0.82 + (i%2)*46, H - FLOOR_THICK - 30 - Math.floor(i/2)*46));
+}
+updateDragEnabled();
+canvas.style.cursor = 'grab';
+</script>
+</body>
+</html>

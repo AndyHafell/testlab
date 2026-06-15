@@ -1,0 +1,1631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NetExplorer '99</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    font-family: "MS Sans Serif", Tahoma, Geneva, sans-serif;
+    background: #008080;
+    overflow: hidden;
+    -webkit-font-smoothing: none;
+  }
+  body { font-size: 13px; }
+
+  /* ===================== DESKTOP / BOOT ===================== */
+  #desktop {
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(circle at 30% 20%, #1a6e6e 0%, #004444 60%, #002222 100%);
+    z-index: 50;
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column;
+  }
+  #desktop.hidden { display: none; }
+
+  .win {
+    background: #c0c0c0;
+    border: 2px solid;
+    border-color: #ffffff #000000 #000000 #ffffff;
+    box-shadow: 1px 1px 0 #808080, inset 1px 1px 0 #dfdfdf;
+    padding: 2px;
+  }
+  .titlebar {
+    background: linear-gradient(90deg, #000080, #1084d0);
+    color: #fff; font-weight: bold;
+    padding: 3px 6px;
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 12px;
+  }
+  .titlebar .tbtns span {
+    display: inline-block; width: 16px; height: 14px;
+    background: #c0c0c0; border: 1px solid;
+    border-color: #fff #000 #000 #fff;
+    text-align: center; line-height: 12px; color: #000; font-size: 10px;
+    margin-left: 2px; font-weight: bold;
+  }
+
+  /* Dial-up connection dialog */
+  #dialup {
+    width: 380px;
+  }
+  #dialup .body { padding: 14px; }
+  #dialup .row { margin-bottom: 9px; display:flex; align-items:center; }
+  #dialup label { width: 90px; display:inline-block; }
+  #dialup input {
+    border: 2px solid; border-color:#808080 #fff #fff #808080;
+    background:#fff; padding:2px 4px; flex:1; font-family:inherit; font-size:12px;
+  }
+  .btn {
+    background:#c0c0c0; border:2px solid;
+    border-color:#fff #000 #000 #fff;
+    padding:4px 14px; font-family:inherit; font-size:12px;
+    cursor:pointer; min-width:75px;
+  }
+  .btn:active { border-color:#000 #fff #fff #000; }
+  .modem-icon {
+    width:48px; height:40px;
+    margin: 0 auto 10px; display:block;
+    image-rendering: pixelated;
+  }
+  #dialStatus {
+    font-size:12px; margin-top:8px; min-height:18px; color:#000;
+  }
+  .progress-outer {
+    border:2px solid; border-color:#808080 #fff #fff #808080;
+    background:#fff; height:18px; margin-top:8px; padding:2px; display:none;
+  }
+  .progress-inner {
+    height:100%; width:0%;
+    background: repeating-linear-gradient(90deg,#000080 0,#000080 10px,#1084d0 10px,#1084d0 12px);
+  }
+  .btnrow { display:flex; gap:8px; justify-content:flex-end; margin-top:12px; }
+
+  /* ===================== BROWSER CHROME ===================== */
+  #browser {
+    position: fixed; inset: 0; display:none; flex-direction:column;
+    background:#c0c0c0;
+  }
+  #browser.show { display:flex; }
+  .menubar {
+    background:#c0c0c0; padding:3px 4px; font-size:12px;
+    border-bottom:1px solid #808080;
+    display:flex; align-items:center; gap:2px;
+  }
+  .menubar .brand { font-weight:bold; color:#000080; margin-right:10px; padding-left:4px;}
+  .menubar .mitem { padding:2px 8px; cursor:default; }
+  .menubar .mitem:hover { background:#000080; color:#fff; }
+  .menubar .nlogo {
+    margin-left:auto; font-weight:bold; color:#fff;
+    background:#000080; padding:2px 8px; font-style:italic;
+    font-size:11px;
+  }
+
+  .toolbar {
+    background:#c0c0c0; padding:4px 4px; display:flex; align-items:center; gap:3px;
+    border-bottom:1px solid #808080;
+  }
+  .tbtn {
+    background:#c0c0c0; border:2px solid; border-color:#fff #808080 #808080 #fff;
+    padding:3px 6px; cursor:pointer; font-size:11px;
+    display:flex; flex-direction:column; align-items:center; min-width:46px;
+    color:#000;
+  }
+  .tbtn:hover { border-color:#fff #404040 #404040 #fff; background:#cacaca; }
+  .tbtn:active { border-color:#808080 #fff #fff #808080; }
+  .tbtn[disabled] { color:#808080; cursor:default; }
+  .tbtn .ico { font-size:16px; line-height:16px; }
+  .tbtn .lbl { font-size:10px; }
+  .tbsep { width:2px; height:32px; background:#808080; margin:0 3px;
+           border-right:1px solid #fff; }
+
+  .addrbar {
+    background:#c0c0c0; padding:4px 6px; display:flex; align-items:center; gap:6px;
+    border-bottom:2px solid #808080;
+  }
+  .addrbar label { font-size:12px; }
+  #address {
+    flex:1; border:2px solid; border-color:#808080 #fff #fff #808080;
+    background:#fff; padding:3px 6px; font-family:inherit; font-size:12px;
+  }
+  #goBtn { padding:3px 12px; }
+
+  /* viewport */
+  #viewport {
+    flex:1; overflow:auto; background:#fff; position:relative;
+  }
+  #pageFrame { width:100%; min-height:100%; }
+
+  /* status bar */
+  .statusbar {
+    background:#c0c0c0; border-top:1px solid #fff;
+    display:flex; align-items:center; height:22px; font-size:11px;
+  }
+  .statusbar .seg {
+    border:1px solid; border-color:#808080 #fff #fff #808080;
+    height:18px; margin:2px; padding:0 8px; display:flex; align-items:center;
+    overflow:hidden; white-space:nowrap;
+  }
+  .statusbar .doc { width:130px; }
+  .statusbar .msg { flex:1; }
+  .statusbar .secure { width:24px; justify-content:center; }
+  .sb-progress {
+    width:160px; padding:2px;
+  }
+  .sb-progress .bar {
+    height:12px; width:0%;
+    background:repeating-linear-gradient(90deg,#000080 0,#000080 6px,#1084d0 6px,#1084d0 8px);
+    transition:width 0.05s linear;
+  }
+
+  /* loading throbber (N) */
+  .throbber {
+    width:18px; height:18px; margin-right:8px;
+    background:#000080; color:#fff; font-weight:bold; font-style:italic;
+    text-align:center; line-height:18px; font-size:12px;
+  }
+  .throbber.spin { animation: blinkN 0.4s steps(2) infinite; }
+  @keyframes blinkN { 50% { background:#1084d0; } }
+
+  /* ===================== AIM CHAT ===================== */
+  #aim {
+    position:fixed; bottom:6px; right:6px; width:230px; z-index:60;
+    display:none;
+  }
+  #aim.show { display:block; }
+  #aim .body { padding:0; background:#c0c0c0; }
+  #aimLog {
+    height:150px; background:#fff; border:2px solid;
+    border-color:#808080 #fff #fff #808080; margin:4px; padding:4px;
+    overflow-y:auto; font-size:11px; line-height:1.35;
+  }
+  #aimLog .me { color:#cc0000; font-weight:bold; }
+  #aimLog .them { color:#0000cc; font-weight:bold; }
+  #aimInputRow { display:flex; gap:4px; margin:0 4px 4px; }
+  #aimInput {
+    flex:1; border:2px solid; border-color:#808080 #fff #fff #808080;
+    padding:2px 4px; font-family:inherit; font-size:11px;
+  }
+  #aim .titlebar { background:linear-gradient(90deg,#5c0099,#9933cc); }
+  .aim-online { font-size:10px; padding:2px 6px; color:#006600; }
+
+  /* AIM minimized launcher */
+  #aimLauncher {
+    position:fixed; bottom:6px; right:6px; z-index:59;
+    background:#5c0099; color:#fff; padding:6px 10px; cursor:pointer;
+    border:2px solid; border-color:#fff #000 #000 #fff; font-weight:bold;
+    font-size:12px; display:none;
+  }
+  #aimLauncher.show { display:block; }
+  #aimLauncher.buzz { animation: buzz 0.15s linear 6; }
+  @keyframes buzz { 0%{transform:translate(0,0)} 25%{transform:translate(-2px,1px)}
+    50%{transform:translate(2px,-1px)} 75%{transform:translate(-1px,-1px)} }
+
+  /* ===================== IN-PAGE STYLES (sandbox via class scope) ===================== */
+  /* All page content gets .page99 wrapper; styles below only apply inside it */
+
+  .page99 { font-family:"Times New Roman", Times, serif; }
+  .page99 a { text-decoration:underline; cursor:pointer; }
+  .page99 img.uc { image-rendering:pixelated; }
+  .page99 .comic { font-family:"Comic Sans MS","Comic Sans",cursive; }
+  .page99 blink { animation: blinker 1s steps(2) infinite; }
+  @keyframes blinker { 50% { opacity:0; } }
+  .page99 marquee, .page99 .marq {
+    overflow:hidden; white-space:nowrap;
+  }
+  .page99 .marq span { display:inline-block; padding-left:100%;
+    animation: marq 12s linear infinite; }
+  @keyframes marq { 0%{transform:translate(0)} 100%{transform:translate(-200%)} }
+  .page99 hr { height:4px; border:0; }
+  .page99 .btn88 {
+    display:inline-block; width:88px; height:31px; line-height:31px;
+    text-align:center; font-size:9px; font-family:"MS Sans Serif",sans-serif;
+    color:#fff; border:1px outset #888; margin:2px; vertical-align:middle;
+    text-decoration:none; overflow:hidden;
+  }
+  .page99 .counter {
+    display:inline-block; background:#000; color:#0f0;
+    font-family:"Courier New",monospace; padding:2px 4px;
+    letter-spacing:2px; border:2px ridge #444;
+  }
+  .page99 .midi-toggle {
+    font-family:"MS Sans Serif",sans-serif; font-size:11px;
+    background:#c0c0c0; border:2px outset #fff; padding:3px 8px; cursor:pointer;
+  }
+  .page99 table.layout { border-collapse:collapse; }
+  .page99 .guestbook-entry {
+    border-bottom:1px dashed #888; padding:4px 0; font-size:13px;
+  }
+  .page99 .gb-input, .page99 .gb-area, .page99 .search-input {
+    font-family:"Times New Roman",serif; font-size:13px;
+    border:2px inset #ccc; padding:2px;
+  }
+  .page99 .gb-btn, .page99 .search-btn {
+    font-family:"MS Sans Serif",sans-serif; font-size:11px;
+    background:#c0c0c0; border:2px outset #fff; padding:3px 10px; cursor:pointer;
+  }
+  .page99 .webring {
+    border:3px ridge #cc9900; background:#ffffcc; padding:8px; margin:14px 0;
+    font-family:"MS Sans Serif",sans-serif; font-size:11px; text-align:center;
+  }
+  .page99 .ucbar {
+    background:repeating-linear-gradient(45deg,#ffcc00 0 12px,#000 12px 24px);
+    height:14px; margin:6px 0;
+  }
+  .page99 .nav404 { text-align:center; padding:40px; }
+
+  /* directory portal */
+  .portal-cat {
+    border:1px solid #000080; background:#f0f0ff; padding:6px; margin:4px;
+    vertical-align:top; width:240px;
+  }
+  .portal-cat h3 { margin:0 0 4px; color:#990000; font-size:14px; }
+  .portal-cat a { font-size:12px; color:#0000cc; }
+
+  /* search results */
+  .sr { margin:10px 0; }
+  .sr .title { color:#0000cc; font-size:14px; text-decoration:underline; cursor:pointer; }
+  .sr .url { color:#008000; font-size:11px; }
+  .sr .desc { font-size:12px; color:#333; }
+
+  /* scrollbars retro-ish */
+  #viewport::-webkit-scrollbar { width:16px; height:16px; }
+  #viewport::-webkit-scrollbar-track { background:#c0c0c0; }
+  #viewport::-webkit-scrollbar-thumb { background:#c0c0c0; border:2px outset #fff; }
+
+  .blackscreen {
+    position:fixed; inset:0; background:#000; z-index:200; display:none;
+    color:#0f0; font-family:"Courier New",monospace; padding:30px;
+    font-size:14px; white-space:pre; line-height:1.5;
+  }
+</style>
+</head>
+<body>
+
+<!-- ===================== DIAL-UP BOOT SCREEN ===================== -->
+<div id="desktop">
+  <div class="win" id="dialup">
+    <div class="titlebar">
+      <span>Connect To: My Connection</span>
+      <span class="tbtns"><span>_</span><span>×</span></span>
+    </div>
+    <div class="body">
+      <canvas class="modem-icon" id="modemCanvas" width="48" height="40"></canvas>
+      <div class="row"><label>User name:</label><input id="uName" value="aiandy" /></div>
+      <div class="row"><label>Password:</label><input id="uPass" type="password" value="******" /></div>
+      <div class="row"><label>Phone #:</label><input id="uPhone" value="5550-NET-1999" /></div>
+      <div class="progress-outer" id="dialProg"><div class="progress-inner" id="dialProgInner"></div></div>
+      <div id="dialStatus">Ready to connect.</div>
+      <div class="btnrow">
+        <button class="btn" id="connectBtn">Connect</button>
+        <button class="btn" id="soundToggle" title="Toggle modem screech">🔊 Sound: ON</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== BROWSER ===================== -->
+<div id="browser">
+  <div class="menubar">
+    <span class="brand">N NetExplorer</span>
+    <span class="mitem">File</span>
+    <span class="mitem">Edit</span>
+    <span class="mitem">View</span>
+    <span class="mitem">Go</span>
+    <span class="mitem">Bookmarks</span>
+    <span class="mitem">Help</span>
+    <span class="nlogo">Netscape Navigator 4.0</span>
+  </div>
+
+  <div class="toolbar">
+    <div class="tbtn" id="navBack" title="Back"><span class="ico">◀</span><span class="lbl">Back</span></div>
+    <div class="tbtn" id="navFwd" title="Forward"><span class="ico">▶</span><span class="lbl">Forward</span></div>
+    <div class="tbtn" id="navStop" title="Stop"><span class="ico">✖</span><span class="lbl">Stop</span></div>
+    <div class="tbtn" id="navReload" title="Reload"><span class="ico">↻</span><span class="lbl">Reload</span></div>
+    <div class="tbtn" id="navHome" title="Home"><span class="ico">🏠</span><span class="lbl">Home</span></div>
+    <div class="tbsep"></div>
+    <div class="tbtn" id="navSearch" title="Search"><span class="ico">🔍</span><span class="lbl">Search</span></div>
+    <div class="tbtn" id="navMail" title="Mail"><span class="ico">✉</span><span class="lbl">Mail</span></div>
+    <div class="throbber" id="throbber" style="margin-left:auto;">N</div>
+  </div>
+
+  <div class="addrbar">
+    <label>Location:</label>
+    <input id="address" value="http://www.netcentral.geo/" spellcheck="false" />
+    <button class="btn" id="goBtn">Go</button>
+  </div>
+
+  <div id="viewport">
+    <div id="pageFrame" class="page99"></div>
+  </div>
+
+  <div class="statusbar">
+    <div class="throbber" id="sbThrob" style="margin:2px 4px;">N</div>
+    <div class="seg doc" id="docStatus">Document: Done</div>
+    <div class="seg sb-progress"><div class="bar" id="sbBar"></div></div>
+    <div class="seg msg" id="statusMsg">Done</div>
+    <div class="seg secure" id="secureSeg" title="Connection">🔓</div>
+  </div>
+</div>
+
+<!-- ===================== AIM CHAT ===================== -->
+<div id="aimLauncher" class="">💬 BuddyChat (1)</div>
+<div id="aim" class="win">
+  <div class="titlebar">
+    <span>IM with xXxModemRiderxXx</span>
+    <span class="tbtns"><span id="aimMin">_</span></span>
+  </div>
+  <div class="body">
+    <div class="aim-online">● xXxModemRiderxXx is Online</div>
+    <div id="aimLog"></div>
+    <div id="aimInputRow">
+      <input id="aimInput" placeholder="Type a message..." />
+      <button class="btn" id="aimSend" style="min-width:auto;padding:2px 8px;">Send</button>
+    </div>
+  </div>
+</div>
+
+<div class="blackscreen" id="dosScreen"></div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   WEB AUDIO: modem screech + MIDI-ish loops, no external files
+   ============================================================ */
+let AC = null;
+function audio(){ if(!AC){ try{ AC = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } return AC; }
+let soundOn = true;
+
+function modemHandshake(){
+  const ctx = audio(); if(!ctx || !soundOn) return Promise.resolve();
+  const now = ctx.currentTime;
+  const master = ctx.createGain();
+  master.gain.value = 0.10;
+  master.connect(ctx.destination);
+
+  function tone(freq, start, dur, type){
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = type||'sine'; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, now+start);
+    g.gain.exponentialRampToValueAtTime(0.9, now+start+0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, now+start+dur);
+    o.connect(g); g.connect(master);
+    o.start(now+start); o.stop(now+start+dur+0.05);
+  }
+  function noise(start, dur, vol){
+    const len = Math.floor(ctx.sampleRate*dur);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for(let i=0;i<len;i++) d[i] = (Math.random()*2-1);
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const g = ctx.createGain(); g.gain.value = vol||0.4;
+    const bp = ctx.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=1800; bp.Q.value=0.8;
+    src.connect(bp); bp.connect(g); g.connect(master);
+    src.start(now+start); src.stop(now+start+dur);
+  }
+  // DTMF-ish dialing
+  [697,770,852,941,697].forEach((f,i)=>{ tone(f,i*0.18,0.14,'sine'); tone(1336,i*0.18,0.14,'sine'); });
+  // ring
+  tone(440,1.0,0.4,'sine'); tone(480,1.0,0.4,'sine');
+  tone(440,1.7,0.4,'sine'); tone(480,1.7,0.4,'sine');
+  // handshake screech
+  tone(1100,2.5,0.5,'square');
+  tone(2100,3.0,0.8,'sawtooth');
+  noise(3.2,1.2,0.35);
+  tone(1300,3.4,0.6,'square');
+  tone(2300,4.0,1.0,'sawtooth');
+  noise(4.0,1.5,0.45);
+  tone(900,5.2,0.4,'square');
+  return new Promise(r=>setTimeout(r, 100));
+}
+
+/* MIDI-style looping music per page using oscillators */
+let midiNodes = null, midiPlaying = false;
+const SCALES = {
+  cheery:  [523,587,659,698,784,659,587,523, 587,659,523,440],
+  spooky:  [330,311,330,392,330,311,247,294, 330,311,277,247],
+  rock:    [220,220,330,294,220,220,196,220, 330,330,392,330],
+  dreamy:  [392,440,494,587,494,440,392,330, 440,494,523,440]
+};
+function startMidi(scaleName){
+  stopMidi();
+  const ctx = audio(); if(!ctx||!soundOn) return;
+  midiPlaying = true;
+  const seq = SCALES[scaleName]||SCALES.cheery;
+  const master = ctx.createGain(); master.gain.value = 0.05;
+  master.connect(ctx.destination);
+  let i = 0;
+  const tempo = 230;
+  const timer = setInterval(()=>{
+    if(!midiPlaying){ clearInterval(timer); return; }
+    const f = seq[i % seq.length]; i++;
+    const o = ctx.createOscillator(); o.type='triangle'; o.frequency.value=f;
+    const g = ctx.createGain();
+    const t = ctx.currentTime;
+    g.gain.setValueAtTime(0.0001,t);
+    g.gain.linearRampToValueAtTime(0.8,t+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+tempo/1000*0.9);
+    o.connect(g); g.connect(master);
+    o.start(t); o.stop(t+tempo/1000);
+    // bass every 4
+    if(i%4===0){
+      const b = ctx.createOscillator(); b.type='sine'; b.frequency.value=f/2;
+      const bg = ctx.createGain();
+      bg.gain.setValueAtTime(0.0001,t); bg.gain.linearRampToValueAtTime(0.6,t+0.02);
+      bg.gain.exponentialRampToValueAtTime(0.0001,t+tempo/1000*1.8);
+      b.connect(bg); bg.connect(master); b.start(t); b.stop(t+tempo/1000*2);
+    }
+  }, tempo);
+  midiNodes = { master, timer };
+}
+function stopMidi(){
+  midiPlaying = false;
+  if(midiNodes){ try{ midiNodes.master.disconnect(); }catch(e){} clearInterval(midiNodes.timer); midiNodes=null; }
+}
+
+/* ============================================================
+   Draw a tiny pixel modem icon on canvas (no external img)
+   ============================================================ */
+(function drawModem(){
+  const c = document.getElementById('modemCanvas');
+  const x = c.getContext('2d');
+  x.fillStyle='#888'; x.fillRect(2,14,44,22);
+  x.fillStyle='#bbb'; x.fillRect(4,16,40,14);
+  x.fillStyle='#0f0'; x.fillRect(8,20,3,3);
+  x.fillStyle='#f00'; x.fillRect(14,20,3,3);
+  x.fillStyle='#ff0'; x.fillRect(20,20,3,3);
+  x.fillStyle='#666'; x.fillRect(2,32,44,4);
+  x.fillStyle='#444'; x.fillRect(20,2,8,12);
+})();
+
+/* ============================================================
+   SESSION STORAGE: guestbooks + counters
+   ============================================================ */
+const SESSION = {
+  guestbooks: {},
+  counters: {},
+};
+function gbKey(p){ return p; }
+function getGuestbook(p){ if(!SESSION.guestbooks[p]) SESSION.guestbooks[p]=[]; return SESSION.guestbooks[p]; }
+function getCounter(p, base){
+  if(SESSION.counters[p]===undefined) SESSION.counters[p] = base + Math.floor(Math.random()*40);
+  SESSION.counters[p]++;
+  return SESSION.counters[p];
+}
+
+/* ============================================================
+   THE WEB — all in-world pages (12+ interlinked)
+   Each page = { title, url, midi, render(ctx) -> html string }
+   ============================================================ */
+
+const RING_ORDER = [
+  'geocities/dragoncave','geocities/spice','geocities/xfiles',
+  'geocities/pixelpalace','geocities/y2kbunker','geocities/catlady',
+  'geocities/skater','geocities/poetry'
+];
+
+function ringNav(slug, ringName){
+  const idx = RING_ORDER.indexOf(slug);
+  const prev = RING_ORDER[(idx-1+RING_ORDER.length)%RING_ORDER.length];
+  const next = RING_ORDER[(idx+1)%RING_ORDER.length];
+  const rnd = RING_ORDER[Math.floor(Math.random()*RING_ORDER.length)];
+  return `<div class="webring">
+    <b>~*~ ${ringName} WebRing ~*~</b><br>
+    <a data-nav="${prev}">[ &lt;&lt; Prev ]</a>
+    <a data-nav="${RING_ORDER[0]}">[ List ]</a>
+    <a data-nav="${rnd}">[ ? Random ]</a>
+    <a data-nav="${next}">[ Next &gt;&gt; ]</a><br>
+    <small>This site is part of the ${ringName} ring. Member #${(idx+1)} of ${RING_ORDER.length}.</small>
+  </div>`;
+}
+
+function counterHTML(slug, base){
+  const n = getCounter(slug, base);
+  const s = String(n).padStart(6,'0');
+  return `<span class="counter" title="Visitor count">${s.split('').join(' ')}</span>`;
+}
+
+function ucGif(){
+  return `<div style="text-align:center;margin:6px 0">
+    <span class="comic" style="background:#ffff00;color:#cc0000;padding:2px 6px;border:2px dashed #cc0000;font-weight:bold;">
+      🚧 UNDER CONSTRUCTION 🚧</span>
+    <div class="ucbar"></div>
+  </div>`;
+}
+
+function guestbookHTML(slug){
+  const entries = getGuestbook(slug);
+  let rows = entries.map(e=>`<div class="guestbook-entry"><b>${escapeHtml(e.name)}</b>
+    <small>(${escapeHtml(e.from)})</small> &mdash; <i>${e.date}</i><br>${escapeHtml(e.msg)}</div>`).join('');
+  if(!entries.length) rows = `<div class="guestbook-entry"><i>No entries yet. Be the first to sign!</i></div>`;
+  return `<div style="border:3px double #000080;background:#fffff0;padding:10px;margin:12px 0">
+    <h3 style="margin-top:0;color:#000080">📖 Sign My Guestbook!</h3>
+    <div id="gbEntries">${rows}</div>
+    <div style="margin-top:8px">
+      <div>Name: <input class="gb-input" id="gbName" size="20" placeholder="Your handle"></div>
+      <div style="margin-top:4px">From: <input class="gb-input" id="gbFrom" size="20" placeholder="City/AOL"></div>
+      <div style="margin-top:4px">Message:<br><textarea class="gb-area" id="gbMsg" rows="3" cols="40" placeholder="Cool site!! :)"></textarea></div>
+      <div style="margin-top:6px"><button class="gb-btn" data-gb="${slug}">Sign Guestbook</button></div>
+    </div>
+  </div>`;
+}
+
+function buttons88(){
+  const list = [
+    ['Netscape NOW!','#000080'],
+    ['IE 5.0','#003366'],
+    ['Get Winamp','#660000'],
+    ['Made on a Mac','#444'],
+    ['Y2K Ready!','#006600'],
+    ['Powered by HTML','#993300']
+  ];
+  return `<div style="text-align:center;margin:8px 0">` +
+    list.map(b=>`<span class="btn88" style="background:${b[1]}">${b[0]}</span>`).join('') +
+    `</div>`;
+}
+
+function midiBar(scale, label){
+  return `<div style="text-align:center;margin:8px 0">
+    <button class="midi-toggle" data-midi="${scale}">♪ MIDI: <span class="midi-state">PLAYING</span> &mdash; ${label}</button>
+  </div>`;
+}
+
+function bestViewed(){
+  return `<div style="text-align:center;font-size:11px;color:#666;margin-top:10px;font-family:'MS Sans Serif',sans-serif">
+    Best viewed in Netscape Navigator 4.0 at 800x600 &middot; 256 colors</div>`;
+}
+
+/* ---------- THE PAGES ---------- */
+const PAGES = {
+
+  /* ===== HOMEPAGE PORTAL ===== */
+  'home': {
+    title:'NetCentral - The Internet Portal',
+    url:'http://www.netcentral.geo/',
+    midi:'cheery',
+    render(){
+      const cats = [
+        ['Arts &amp; Humanities', [['Pixel Palace','geocities/pixelpalace'],['Bad Poetry Corner','geocities/poetry'],['ASCII Art','geocities/pixelpalace']]],
+        ['Music', [['Spice Girls Shrine','geocities/spice'],['Garage Rock Zone','geocities/skater']]],
+        ['Entertainment &amp; TV', [['The X-Files Truth','geocities/xfiles'],['Dragon Cave RPG','geocities/dragoncave']]],
+        ['Society &amp; Culture', [['Conspiracy Corner','geocities/xfiles'],['Crazy Cat Lady','geocities/catlady']]],
+        ['Science', [['Y2K Survival Bunker','geocities/y2kbunker']]],
+        ['Computers &amp; Internet', [['Download Winamp','downloads'],['Build Your Homepage','geocities/pixelpalace']]],
+        ['Recreation &amp; Sports', [['Skater Kingdom','geocities/skater']]],
+        ['News &amp; Media', [['Hotmail Login','mail'],['Chat Now','chat']]]
+      ];
+      let grid = '<table class="layout"><tr>';
+      cats.forEach((c,i)=>{
+        grid += `<td class="portal-cat"><h3>${c[0]}</h3>` +
+          c[1].map(l=>`<a data-nav="${l[1]}">${l[0]}</a>`).join('<br>') + `</td>`;
+        if(i%2===1) grid += '</tr><tr>';
+      });
+      grid += '</tr></table>';
+
+      return `<div style="background:#ffffff" align="center">
+        <table width="760" align="center" cellpadding="0" cellspacing="0"><tr><td>
+        <div style="background:linear-gradient(#6600cc,#9933ff);padding:12px;border-bottom:4px solid #330066">
+          <span style="font-size:38px;font-weight:bold;color:#ffff00;font-family:Arial,sans-serif;text-shadow:2px 2px #000">
+            Net<span style="color:#00ffff">Central</span></span><br>
+          <span style="color:#fff;font-style:italic">Your Front Door to the World Wide Web! &copy; 1999</span>
+        </div>
+
+        <div style="background:#330066;padding:12px;text-align:center">
+          <input class="search-input" id="searchBox" size="40" placeholder="Search the Web...">
+          <button class="search-btn" id="searchGo">Search!</button>
+          <div style="margin-top:5px;color:#ffcc00;font-size:11px;font-family:'MS Sans Serif',sans-serif">
+            <a data-nav="search?q=spice girls" style="color:#fff">Spice Girls</a> &middot;
+            <a data-nav="search?q=ufo" style="color:#fff">UFOs</a> &middot;
+            <a data-nav="search?q=y2k" style="color:#fff">Y2K Bug</a> &middot;
+            <a data-nav="search?q=mp3" style="color:#fff">MP3</a>
+          </div>
+        </div>
+
+        <div class="marq" style="background:#000;color:#0f0;padding:4px;font-family:'MS Sans Serif',sans-serif">
+          <span>★ WELCOME TO THE INFORMATION SUPERHIGHWAY ★ &nbsp; Today is 12/31/1999 &nbsp; ★ You are visitor ${'&nbsp;'} &nbsp; ★ Don't forget to bookmark us! ★ Buy stock in Pets.com ★</span>
+        </div>
+
+        <div style="padding:10px">
+          <h2 style="color:#990000;border-bottom:2px solid #990000">Web Directory</h2>
+          ${grid}
+        </div>
+
+        <div style="background:#eee;padding:8px;border-top:2px solid #999;text-align:center">
+          Visitors since launch: ${counterHTML('home', 1048000)}
+          ${buttons88()}
+          ${bestViewed()}
+        </div>
+        ${midiBar('cheery','Portal Theme')}
+        </td></tr></table>
+      </div>`;
+    }
+  },
+
+  /* ===== DRAGON CAVE FANTASY RPG FAN SITE ===== */
+  'geocities/dragoncave': {
+    title:"~*~ Drakkar's Dragon Cave ~*~",
+    url:'http://www.geocities.geo/EnchantedForest/4231/',
+    midi:'dreamy',
+    render(){
+      return pageWrap('#1a0033', '#ffcc00', `
+        <div align="center">
+        <h1 class="comic" style="color:#ffcc00;text-shadow:2px 2px #660066">⚔ Drakkar's Dragon Cave ⚔</h1>
+        ${ucGif()}
+        <p class="comic" style="font-size:16px">Welcome, brave traveler, to my lair of FANTASY and ADVENTURE!!!</p>
+        <hr style="background:#ffcc00">
+        <table class="layout" width="600"><tr><td valign="top" width="180" style="border-right:2px solid #ffcc00;padding-right:10px">
+          <h3 style="color:#00ffcc">~ Navigation ~</h3>
+          <a data-nav="geocities/dragoncave/bestiary" style="color:#ffcc00">» My Bestiary</a><br><br>
+          <a data-nav="geocities/spice" style="color:#ffcc00">» Spice Shrine</a><br><br>
+          <a data-nav="geocities/poetry" style="color:#ffcc00">» Epic Poems</a><br><br>
+          <a data-nav="home" style="color:#ffcc00">» Back to Portal</a>
+        </td><td valign="top" style="padding-left:14px;text-align:left">
+          <p style="color:#fff">Hail and well met! My name is Drakkar (Kevin IRL) and I am a level 47 mage.
+          This page is dedicated to all things DRAGON. I've been collecting dragon lore since I got
+          my AOL disk in the mail. <blink style="color:#ff0000">NEW!</blink> I added 3 dragons!</p>
+          <p style="color:#00ffcc">My favorite dragon is the <a data-nav="geocities/dragoncave/bestiary" style="color:#ffff00">Ancient Red Wyrm</a>.
+          Click to enter the Bestiary if you DARE.</p>
+          <marquee class="marq" style="color:#ff66ff"><span>~ HERE BE DRAGONS ~ enter at your own risk ~ the cave is deep ~</span></marquee>
+        </td></tr></table>
+        <hr style="background:#ffcc00">
+        Cave Visitors: ${counterHTML('geocities/dragoncave', 13370)}
+        ${ringNav('geocities/dragoncave','Fantasy Realms')}
+        ${guestbookHTML('geocities/dragoncave')}
+        ${buttons88()}
+        ${midiBar('dreamy','Greensleeves.mid')}
+        ${bestViewed()}
+        </div>`);
+    }
+  },
+
+  'geocities/dragoncave/bestiary': {
+    title:"Drakkar's Bestiary",
+    url:'http://www.geocities.geo/EnchantedForest/4231/bestiary.html',
+    midi:'dreamy',
+    render(){
+      const beasts = [
+        ['Ancient Red Wyrm','Breathes fire. 9000 HP. Hoards gold and Beanie Babies.'],
+        ['Frost Drake','Cold as a 56k modem in winter. Weak to MP3s.'],
+        ['Sea Serpent','Lives in the depths of the World Wide Web.'],
+        ['Wyvern','Two legs, big attitude, best viewed in Netscape.']
+      ];
+      return pageWrap('#001a33','#66ccff', `
+        <div align="center">
+        <h1 class="comic" style="color:#66ccff">📜 The Bestiary 📜</h1>
+        <p style="color:#fff" class="comic">All monsters lovingly hand-typed by yours truly!</p>
+        ${beasts.map(b=>`<div style="border:2px ridge #66ccff;background:#002244;color:#fff;width:500px;margin:8px auto;padding:8px;text-align:left">
+          <b style="color:#ffcc00">${b[0]}</b><br>${b[1]}</div>`).join('')}
+        <p><a data-nav="geocities/dragoncave" style="color:#66ccff">« Back to the Cave</a></p>
+        ${counterHTML('geocities/dragoncave/bestiary', 4200)}
+        ${midiBar('dreamy','Greensleeves.mid')}
+        </div>`);
+    }
+  },
+
+  /* ===== SPICE GIRLS SHRINE (band shrine) ===== */
+  'geocities/spice': {
+    title:'~*SpIcE gIrLs 4 EvA*~',
+    url:'http://www.geocities.geo/SunsetStrip/1996/',
+    midi:'cheery',
+    render(){
+      return pageWrap('#ff66cc','#330033', `
+        <div align="center" style="background:url('') #ff99cc">
+        <h1 class="comic" style="color:#cc0066;font-size:34px">★*~SpIcE gIrLs ShRiNe~*★</h1>
+        <p class="comic" style="color:#660033;font-size:18px">GiRl PoWeR!!!1! ✌💋</p>
+        ${ucGif()}
+        <table class="layout" width="620" style="margin:0 auto"><tr>
+        ${['Scary','Sporty','Baby','Ginger','Posh'].map((g,i)=>
+          `<td align="center" style="padding:6px"><div style="width:80px;height:80px;background:hsl(${i*60},80%,70%);border:3px ridge #cc0066;line-height:80px;font-weight:bold">${g[0]}</div>
+          <b style="color:#660033">${g}</b></td>`).join('')}
+        </tr></table>
+        <hr style="height:6px;background:#cc0066;border:0">
+        <p class="comic" style="color:#330033;font-size:15px;max-width:560px;margin:0 auto">
+        OMG this is my shrine 2 the BEST band EVER!!! I luv u Spice Girls 4eva!!
+        Sign my guestbook & tell me ur fave!! <blink style="color:#cc0000">NEW PICS SOON!!</blink></p>
+        <p><a data-nav="geocities/spice/lyrics" style="color:#660033;font-weight:bold">» Wannabe Lyrics Page «</a></p>
+        <marquee class="marq" style="color:#cc0066;font-weight:bold"><span>★ If you wannabe my lover, you gotta get with my friends ★ zig-a-zig-ah ★</span></marquee>
+        Fans who visited: ${counterHTML('geocities/spice', 88210)}
+        ${ringNav('geocities/spice','90s Pop')}
+        ${guestbookHTML('geocities/spice')}
+        ${buttons88()}
+        ${midiBar('cheery','Wannabe.mid')}
+        ${bestViewed()}
+        </div>`);
+    }
+  },
+
+  'geocities/spice/lyrics': {
+    title:'Wannabe Lyrics',
+    url:'http://www.geocities.geo/SunsetStrip/1996/lyrics.html',
+    midi:'cheery',
+    render(){
+      return pageWrap('#ff99cc','#660033',`
+        <div align="center">
+        <h1 class="comic" style="color:#cc0066">♫ Wannabe (Lyrics) ♫</h1>
+        <div style="background:#fff;color:#cc0066;width:440px;margin:0 auto;padding:14px;border:4px dotted #cc0066" class="comic">
+        Yo I'll tell you what I want, what I really really want<br>
+        So tell me what you want, what you really really want<br>
+        I wanna, I wanna, I wanna, I wanna<br>
+        I wanna really really really wanna zig-a-zig-ah<br><br>
+        <i>(typed from memory, may b wrong!!)</i>
+        </div>
+        <p><a data-nav="geocities/spice" style="color:#660033">« Back to Shrine</a></p>
+        ${counterHTML('geocities/spice/lyrics', 5600)}
+        ${midiBar('cheery','Wannabe.mid')}
+        </div>`);
+    }
+  },
+
+  /* ===== X-FILES / CONSPIRACY CORNER ===== */
+  'geocities/xfiles': {
+    title:'THE TRUTH IS OUT THERE',
+    url:'http://www.geocities.geo/Area51/Hangar/9999/',
+    midi:'spooky',
+    render(){
+      return pageWrap('#000000','#00ff00',`
+        <div align="center">
+        <h1 style="color:#00ff00;font-family:'Courier New',monospace;letter-spacing:3px">▓ THE TRUTH IS OUT THERE ▓</h1>
+        <p style="color:#00ff00;font-family:'Courier New',monospace">[ CLASSIFIED // EYES ONLY // DO NOT DISTRIBUTE ]</p>
+        ${ucGif()}
+        <table class="layout" width="600" style="margin:0 auto"><tr><td valign="top" width="160" style="border-right:1px solid #00ff00;padding-right:8px;text-align:left">
+          <h3 style="color:#00ff00">FILES:</h3>
+          <a data-nav="geocities/xfiles/area51" style="color:#00ff00">&gt; Area 51</a><br>
+          <a data-nav="geocities/y2kbunker" style="color:#00ff00">&gt; Y2K Bug</a><br>
+          <a data-nav="geocities/xfiles" style="color:#00ff00">&gt; Roswell '47</a><br>
+          <a data-nav="home" style="color:#00ff00">&gt; EXIT</a>
+        </td><td valign="top" style="padding-left:12px;text-align:left;color:#00ff00;font-family:'Courier New',monospace;font-size:13px">
+          <p>WAKE UP, SHEEPLE. The government has been hiding the TRUTH from
+          us since 1947. They don't want you to know about the
+          <a data-nav="geocities/xfiles/area51" style="color:#ffff00">aliens at Area 51</a>.</p>
+          <p><blink style="color:#ff0000">⚠ THEY ARE WATCHING ⚠</blink></p>
+          <p>This site is updated whenever I can dodge the black helicopters.
+          Trust no one. Especially your ISP.</p>
+        </td></tr></table>
+        <marquee class="marq" style="color:#ff0000;font-family:monospace"><span>▓ X X X ▓ THEY WALK AMONG US ▓ DENY EVERYTHING ▓ THE CAKE IS A LIE ▓</span></marquee>
+        Believers reached: ${counterHTML('geocities/xfiles', 51051)}
+        ${ringNav('geocities/xfiles','Paranormal')}
+        ${guestbookHTML('geocities/xfiles')}
+        ${midiBar('spooky','XFiles_Theme.mid')}
+        <div style="color:#006600;font-size:10px;margin-top:8px">best viewed in the dark</div>
+        </div>`);
+    }
+  },
+
+  'geocities/xfiles/area51': {
+    title:'AREA 51 - CLASSIFIED',
+    url:'http://www.geocities.geo/Area51/Hangar/9999/area51.html',
+    midi:'spooky',
+    render(){
+      return pageWrap('#000','#00ff00',`
+        <div align="center">
+        <h1 style="color:#ffff00;font-family:'Courier New',monospace">██ AREA 51 ██</h1>
+        <pre style="color:#00ff00;text-align:left;display:inline-block;font-size:12px">
+       .-"""-.
+      /       \\
+     |  O   O  |     &lt;-- ACTUAL GREY ALIEN
+      \\   ^   /          (photo CONFISCATED)
+       '-...-'
+        </pre>
+        <p style="color:#00ff00;font-family:monospace;max-width:480px;margin:0 auto">
+        Located in the Nevada desert. The hangars hold recovered UFO craft.
+        I have a friend whose cousin's neighbor worked there. He saw EVERYTHING.</p>
+        <p><a data-nav="geocities/xfiles" style="color:#00ff00">« BACK TO FILES</a></p>
+        ${counterHTML('geocities/xfiles/area51', 9911)}
+        ${midiBar('spooky','XFiles_Theme.mid')}
+        </div>`);
+    }
+  },
+
+  /* ===== PIXEL PALACE (pixel-art homepage) ===== */
+  'geocities/pixelpalace': {
+    title:"PixelPaul's Pixel Palace",
+    url:'http://www.geocities.geo/SiliconValley/2048/',
+    midi:'dreamy',
+    render(){
+      // build a tiny pixel-art canvas placeholder using divs
+      let grid='';
+      const pal=['#000','#f00','#0f0','#00f','#ff0','#f0f','#0ff','#fff'];
+      for(let r=0;r<8;r++){ for(let c=0;c<16;c++){
+        grid+=`<span style="display:inline-block;width:10px;height:10px;background:${pal[(r+c)%pal.length]}"></span>`;
+      } grid+='<br>'; }
+      return pageWrap('#000033','#00ffff',`
+        <div align="center">
+        <h1 style="color:#00ffff;font-family:'Courier New',monospace">▚ PIXEL PALACE ▞</h1>
+        <p style="color:#fff" class="comic">Welcome to my hand-crafted pixel art gallery! Made in MS Paint with luv.</p>
+        <div style="line-height:0;background:#000;display:inline-block;padding:8px;border:3px ridge #00ffff">${grid}</div>
+        <h3 style="color:#ff00ff">~ My ASCII Signature ~</h3>
+        <pre style="color:#00ff00;display:inline-block;text-align:left">
+  ____  _          _
+ |  _ \\(_)_  _____| |
+ | |_) | \\ \\/ / _ \\ |
+ |  __/| |>  <  __/ |
+ |_|   |_/_/\\_\\___|_|  PALACE
+        </pre>
+        <p style="color:#fff">Tools I use: <b>MS Paint</b>, <b>Paint Shop Pro 5</b>, my own two hands.</p>
+        <p><a data-nav="geocities/catlady" style="color:#00ffff">» See my friend's Cat Page</a></p>
+        Pixels rendered: ${counterHTML('geocities/pixelpalace', 24096)}
+        ${ringNav('geocities/pixelpalace','Webmaster')}
+        ${guestbookHTML('geocities/pixelpalace')}
+        ${buttons88()}
+        ${midiBar('dreamy','Canon_in_D.mid')}
+        ${bestViewed()}
+        </div>`);
+    }
+  },
+
+  /* ===== Y2K SURVIVAL BUNKER ===== */
+  'geocities/y2kbunker': {
+    title:'Y2K SURVIVAL BUNKER',
+    url:'http://www.geocities.geo/Heartland/Bunker/2000/',
+    midi:'spooky',
+    render(){
+      return pageWrap('#330000','#ffcc00',`
+        <div align="center">
+        <h1 class="comic" style="color:#ff0000;text-shadow:1px 1px #000">☢ Y2K SURVIVAL BUNKER ☢</h1>
+        <h2 style="color:#ffcc00">Days until the END: <blink style="color:#ff0000">1</blink></h2>
+        ${ucGif()}
+        <div style="background:#000;color:#ff0000;border:4px ridge #ff0000;width:520px;margin:10px auto;padding:12px;font-family:'Courier New',monospace;text-align:left">
+        ⚠ WARNING ⚠<br>
+        When the clock strikes midnight on 12/31/1999, ALL computers will FAIL.<br>
+        Planes will fall. Banks will collapse. Your VCR will blink 12:00 FOREVER.<br>
+        ARE YOU PREPARED?!?!
+        </div>
+        <h3 style="color:#ffcc00">My Survival Checklist:</h3>
+        <ul style="display:inline-block;text-align:left;color:#fff">
+          <li>☑ 500 cans of beans</li>
+          <li>☑ Generator + 200 gal gasoline</li>
+          <li>☑ Battery radio (for the news)</li>
+          <li>☑ Printed copy of the internet</li>
+          <li>☐ Convince mom it's real</li>
+        </ul>
+        <p><a data-nav="geocities/xfiles" style="color:#ffcc00">» The conspiracy behind Y2K</a></p>
+        <marquee class="marq" style="color:#ff0000"><span>STOCK UP NOW ★ THE END IS NEAR ★ DO NOT TRUST THE CLOCK ★</span></marquee>
+        Survivors briefed: ${counterHTML('geocities/y2kbunker', 19999)}
+        ${ringNav('geocities/y2kbunker','Survivalist')}
+        ${guestbookHTML('geocities/y2kbunker')}
+        ${midiBar('spooky','Toccata.mid')}
+        ${bestViewed()}
+        </div>`);
+    }
+  },
+
+  /* ===== CRAZY CAT LADY ===== */
+  'geocities/catlady': {
+    title:"Mittens' Magical Cat Kingdom",
+    url:'http://www.geocities.geo/Petsburgh/Park/7777/',
+    midi:'cheery',
+    render(){
+      const cats=['Mittens','Whiskers','Mr. Fluffles','Princess','Sir Pounce-a-Lot','Boots'];
+      return pageWrap('#ffccee','#660044',`
+        <div align="center">
+        <h1 class="comic" style="color:#cc0088">🐱 Mittens' Magical Cat Kingdom 🐱</h1>
+        <p class="comic" style="color:#660044;font-size:16px">Hi!! I'm Brenda and these are my 6 BABIES!!! 🐾</p>
+        ${ucGif()}
+        <table class="layout" style="margin:0 auto"><tr>
+        ${cats.map((c,i)=>`<td align="center" style="padding:6px">
+          <div style="width:70px;height:70px;background:hsl(${30+i*15},60%,75%);border:3px ridge #cc0088;border-radius:50%;line-height:70px;font-size:28px">🐈</div>
+          <b class="comic" style="color:#660044">${c}</b></td>${i===2?'</tr><tr>':''}`).join('')}
+        </tr></table>
+        <p class="comic" style="color:#660044;max-width:500px;margin:10px auto">
+        Welcome to my homepage all about my precious fur babies!!! I update with new pics
+        whenever I figure out how to use the scanner. <blink style="color:#cc0000">♥ MEOW ♥</blink></p>
+        <p><a data-nav="geocities/poetry" style="color:#cc0088">» My Cat Poetry Collection «</a></p>
+        Cat lovers visited: ${counterHTML('geocities/catlady', 7449)}
+        ${ringNav('geocities/catlady','Pet Lovers')}
+        ${guestbookHTML('geocities/catlady')}
+        ${buttons88()}
+        ${midiBar('cheery','Meow_Mix.mid')}
+        ${bestViewed()}
+        </div>`);
+    }
+  },
+
+  /* ===== SKATER KINGDOM ===== */
+  'geocities/skater': {
+    title:'xX SK8 KiNgDoM Xx',
+    url:'http://www.geocities.geo/Pipeline/5050/',
+    midi:'rock',
+    render(){
+      return pageWrap('#1a1a1a','#ff6600',`
+        <div align="center">
+        <h1 style="color:#ff6600;font-family:Impact,sans-serif;letter-spacing:2px">xX SK8 KiNgDoM Xx</h1>
+        <p style="color:#ffcc00" class="comic">sk8 or die!!! this site is about skateboarding + rock music \m/</p>
+        ${ucGif()}
+        <table class="layout" width="600" style="margin:0 auto"><tr><td valign="top" width="160" style="text-align:left;border-right:2px solid #ff6600;padding-right:10px">
+          <h3 style="color:#ff6600">~MENU~</h3>
+          <a data-nav="geocities/skater/tricks" style="color:#ffcc00">&gt; My Best Tricks</a><br>
+          <a data-nav="geocities/skater" style="color:#ffcc00">&gt; Fav Bands</a><br>
+          <a data-nav="downloads" style="color:#ffcc00">&gt; Get Winamp</a><br>
+          <a data-nav="home" style="color:#ffcc00">&gt; Bail (home)</a>
+        </td><td valign="top" style="text-align:left;padding-left:12px;color:#fff">
+          <p>sup. im Tony (not THAT tony lol). i skate every day after school.
+          this is my sik webpage i made in notepad. NO POSERS ALLOWED.</p>
+          <h3 style="color:#ff6600">Bands that RULE:</h3>
+          <ul style="color:#ffcc00"><li>blink-182</li><li>The Offspring</li><li>Green Day</li><li>Limp Bizkit (sometimes)</li></ul>
+        </td></tr></table>
+        <marquee class="marq" style="color:#ff6600"><span>\m/ ROCK ON \m/ kickflip > heelflip > FIGHT ME \m/ TURN IT UP \m/</span></marquee>
+        Skaters who shredded: ${counterHTML('geocities/skater', 6660)}
+        ${ringNav('geocities/skater','Punk Rock')}
+        ${guestbookHTML('geocities/skater')}
+        ${buttons88()}
+        ${midiBar('rock','All_Star.mid')}
+        ${bestViewed()}
+        </div>`);
+    }
+  },
+
+  'geocities/skater/tricks': {
+    title:'My Best Tricks',
+    url:'http://www.geocities.geo/Pipeline/5050/tricks.html',
+    midi:'rock',
+    render(){
+      return pageWrap('#1a1a1a','#ff6600',`
+        <div align="center">
+        <h1 style="color:#ff6600;font-family:Impact,sans-serif">MY BEST TRICKS</h1>
+        <ol style="display:inline-block;text-align:left;color:#fff;font-size:15px">
+          <li>Ollie (landed it 100 times)</li>
+          <li>Kickflip (landed it ~3 times)</li>
+          <li>Manual down the school steps (broke my arm)</li>
+          <li>360 (in my dreams)</li>
+        </ol>
+        <p style="color:#ffcc00" class="comic">pics coming when my friend gets a digital camera!!</p>
+        <p><a data-nav="geocities/skater" style="color:#ff6600">« back</a></p>
+        ${counterHTML('geocities/skater/tricks', 1212)}
+        ${midiBar('rock','All_Star.mid')}
+        </div>`);
+    }
+  },
+
+  /* ===== BAD POETRY CORNER ===== */
+  'geocities/poetry': {
+    title:'~ Whispers of My Soul ~',
+    url:'http://www.geocities.geo/Paris/6789/',
+    midi:'dreamy',
+    render(){
+      return pageWrap('#0a0014','#cc99ff',`
+        <div align="center">
+        <h1 class="comic" style="color:#cc99ff;font-style:italic">~ Whispers of My Soul ~</h1>
+        <p style="color:#9966cc" class="comic">a poetry collection by RavenMoon98 🌙</p>
+        ${ucGif()}
+        <div style="background:#1a0033;color:#ddccff;border:3px double #cc99ff;width:480px;margin:10px auto;padding:16px;font-style:italic;text-align:left">
+        <b>Ode to a 56k Modem</b><br><br>
+        Oh modem, sing your screeching song,<br>
+        connecting me where I belong,<br>
+        the world wide web, so vast, so deep,<br>
+        I'll surf all night and lose my sleep.<br><br>
+        <small style="color:#9966cc">— RavenMoon98, 1999</small>
+        </div>
+        <p><a data-nav="geocities/catlady" style="color:#cc99ff">» Brenda's Cat Page (my pen pal)</a></p>
+        <marquee class="marq" style="color:#cc99ff"><span>♥ poetry is the language of the soul ♥ thx 4 reading ♥</span></marquee>
+        Souls touched: ${counterHTML('geocities/poetry', 3210)}
+        ${ringNav('geocities/poetry','Dark Poetry')}
+        ${guestbookHTML('geocities/poetry')}
+        ${buttons88()}
+        ${midiBar('dreamy','Moonlight_Sonata.mid')}
+        ${bestViewed()}
+        </div>`);
+    }
+  },
+
+  /* ===== DOWNLOADS ===== */
+  'downloads': {
+    title:'Download Central',
+    url:'http://www.netcentral.geo/downloads/',
+    midi:'cheery',
+    render(){
+      const dl=[
+        ['Winamp 2.5','It really whips the llama\'s ass! (1.4 MB)'],
+        ['Netscape Navigator 4.7','The browser that started it all (12 MB - 1.5 hrs on 56k)'],
+        ['ICQ 99b','Uh-oh!  (2.1 MB)'],
+        ['RealPlayer G2','Buffering... Buffering... (3.5 MB)'],
+        ['Napster','Free music!! (shhh) (1.1 MB)']
+      ];
+      return pageWrap('#003366','#fff',`
+        <div align="center">
+        <h1 style="color:#fff">📥 Download Central</h1>
+        <p style="color:#cceeff">The best shareware on the Net! (modem users grab a snack)</p>
+        ${dl.map(d=>`<div style="background:#fff;color:#003366;width:480px;margin:8px auto;padding:8px;border:2px outset #99ccff;text-align:left">
+          <b>${d[0]}</b> <a data-nav="downloads" style="color:#cc0000;float:right">[ DOWNLOAD ]</a><br>
+          <small>${d[1]}</small></div>`).join('')}
+        <p><a data-nav="home" style="color:#fff">« Back to Portal</a></p>
+        Downloads served: ${counterHTML('downloads', 503221)}
+        ${bestViewed()}
+        </div>`);
+    }
+  },
+
+  /* ===== HOTMAIL-STYLE INBOX ===== */
+  'mail': {
+    title:'HotMail Inbox',
+    url:'http://www.hotmail.geo/inbox/',
+    midi:null,
+    render(){
+      const mails=[
+        ['MAILER-DAEMON','FWD: FWD: FWD: You are the 1,000,000th visitor!!!','12/31/99','You have WON a FREE iMac!!! Click here to claim (legit!!)'],
+        ['Aunt Carol','Re: Re: cute kittens','12/30/99','Forward this to 10 people or you will have bad luck for 7 years!! 😺'],
+        ['Bill Gates','Microsoft Email Tracking Program','12/29/99','For every person you forward this to, Bill Gates will send you $245.00!!'],
+        ['xXxModemRiderxXx','wanna chat??','12/31/99','yo get on AIM, i\'m bored. asl?'],
+        ['NetCentral','Welcome to the Information Superhighway','12/28/99','Thanks for signing up! Don\'t forget to bookmark our portal.']
+      ];
+      return `<div style="background:#fff;font-family:Arial,sans-serif">
+        <div style="background:#cc0000;color:#fff;padding:10px"><b style="font-size:22px">Hot<span style="color:#ffff00">Mail</span></b>
+        <span style="float:right">aiandy@hotmail.geo &middot; <a data-nav="home" style="color:#fff">Sign Out</a></span></div>
+        <div style="display:flex">
+          <div style="width:130px;background:#eef;padding:10px;border-right:1px solid #99c">
+            <b>Folders</b><br>
+            📥 Inbox (${mails.length})<br>
+            📤 Sent<br>
+            🗑 Trash<br>
+            📝 Drafts<br><br>
+            <a data-nav="chat" style="color:#0000cc">Open Chat</a>
+          </div>
+          <div style="flex:1;padding:10px;font-family:Arial,sans-serif">
+            <h3 style="margin-top:0">Inbox</h3>
+            <table width="100%" cellspacing="0" style="border:1px solid #99c;font-size:13px">
+            <tr style="background:#ccddff;font-weight:bold"><td style="padding:4px">From</td><td>Subject</td><td>Date</td></tr>
+            ${mails.map((m,i)=>`<tr style="background:${i%2?'#f4f4ff':'#fff'};cursor:pointer" data-mail="${i}">
+              <td style="padding:4px">${m[0]}</td><td><a style="color:#0000cc">${m[1]}</a></td><td>${m[2]}</td></tr>
+              <tr id="mailbody${i}" style="display:none"><td colspan="3" style="background:#ffffe0;padding:8px;font-style:italic">${m[3]}</td></tr>`).join('')}
+            </table>
+            <p style="font-size:11px;color:#666">You have 2 MB of free storage. Upgrade to HotMail Plus for more!</p>
+          </div>
+        </div>
+      </div>`;
+    }
+  },
+
+  /* ===== IRC/CHAT (full page version) ===== */
+  'chat': {
+    title:'WebChat 99',
+    url:'http://www.netcentral.geo/chat/',
+    midi:null,
+    render(){
+      return `<div style="background:#000;color:#0f0;font-family:'Courier New',monospace;padding:14px;min-height:90%">
+        <div style="border:1px solid #0f0;padding:8px">
+        <b>#general</b> &middot; 23 users online &middot; <a data-nav="home" style="color:#0ff">[ leave ]</a>
+        <hr style="border-color:#063">
+        <div id="ircLog" style="height:300px;overflow-y:auto;font-size:13px;line-height:1.5">
+          <div>&lt;<span style="color:#0ff">Server</span>&gt; Welcome to WebChat 99! Be excellent to each other.</div>
+          <div>&lt;<span style="color:#ff0">l33tHaxor</span>&gt; anyone got the new offspring mp3??</div>
+          <div>&lt;<span style="color:#f0f">Sk8rGrrl</span>&gt; a/s/l?</div>
+          <div>&lt;<span style="color:#0ff">DialUpDave</span>&gt; brb mom needs the phone line</div>
+          <div>&lt;<span style="color:#ff0">l33tHaxor</span>&gt; lol</div>
+          <div>&lt;<span style="color:#f80">xXxModemRiderxXx</span>&gt; this y2k stuff is freaking me out</div>
+        </div>
+        <hr style="border-color:#063">
+        <div style="display:flex;gap:6px">
+          <span style="color:#0f0">&lt;aiandy&gt;</span>
+          <input id="ircInput" style="flex:1;background:#000;color:#0f0;border:1px solid #0f0;font-family:'Courier New',monospace;padding:2px">
+          <button class="search-btn" id="ircSend" style="background:#030;color:#0f0;border:1px solid #0f0">Say</button>
+        </div>
+        </div>
+        <div style="color:#063;font-size:11px;margin-top:8px">Tip: don't give out your real name. Trust no one (especially l33tHaxor).</div>
+      </div>`;
+    }
+  },
+
+  /* ===== SEARCH RESULTS (dynamic) ===== */
+  'search': {
+    title:'NetCentral Search Results',
+    url:'http://www.netcentral.geo/search',
+    midi:null,
+    render(ctx){
+      const q = (ctx && ctx.query) ? ctx.query : '';
+      const results = doSearch(q);
+      let body = `<div style="background:#fff;padding:14px;font-family:Arial,sans-serif">
+        <div style="background:linear-gradient(#6600cc,#9933ff);padding:8px;margin:-14px -14px 14px">
+          <span style="font-size:22px;font-weight:bold;color:#ffff00">Net<span style="color:#0ff">Central</span> Search</span>
+        </div>
+        <div style="margin-bottom:10px">
+          <input class="search-input" id="searchBox2" size="40" value="${escapeHtml(q)}">
+          <button class="search-btn" id="searchGo2">Search!</button>
+        </div>`;
+      if(!q.trim()){
+        body += `<p style="color:#666">Enter a search term above. Try: <a data-nav="search?q=ufo" style="color:#00c">ufo</a>,
+          <a data-nav="search?q=spice girls" style="color:#00c">spice girls</a>,
+          <a data-nav="search?q=dragons" style="color:#00c">dragons</a>.</p>`;
+      } else if(results.length===0){
+        body += `<p style="color:#900"><b>No web pages found for "${escapeHtml(q)}".</b></p>
+          <p style="color:#666">Try different keywords. The Web only has so many pages in 1999!</p>`;
+      } else {
+        body += `<p style="color:#666;font-size:12px">Found ${results.length} result(s) for <b>"${escapeHtml(q)}"</b> in 0.0${Math.floor(Math.random()*9)+1} seconds:</p>`;
+        body += results.map(r=>`<div class="sr">
+          <a class="title" data-nav="${r.slug}">${r.title}</a>
+          <div class="url">${PAGES[r.slug]?PAGES[r.slug].url:''}</div>
+          <div class="desc">${r.desc}</div></div>`).join('');
+      }
+      body += `<p style="margin-top:20px"><a data-nav="home" style="color:#00c">« Back to Portal</a></p></div>`;
+      return body;
+    }
+  },
+
+  /* ===== 404 ===== */
+  '404': {
+    title:'404 Not Found',
+    url:'',
+    midi:null,
+    render(ctx){
+      return `<div class="nav404" style="background:#fff">
+        <h1 style="color:#cc0000;font-size:48px">404</h1>
+        <h2>File Not Found</h2>
+        <p>The page you requested could not be found on this server, or doesn't exist
+        in the 1999 internet.</p>
+        <p style="color:#888">${ctx && ctx.url ? escapeHtml(ctx.url) : ''}</p>
+        <pre style="display:inline-block;text-align:left;color:#888">
+   _  _    ___  _  _
+  | || |  / _ \\| || |
+  | || |_| | | | || |_
+  |__   _| |_| |__   _|
+     |_|  \\___/   |_|
+        </pre>
+        <p><a data-nav="home" style="color:#00c">« Return to NetCentral Portal</a></p>
+      </div>`;
+    }
+  }
+};
+
+/* page wrapper helper (tiled background + base colors) */
+function pageWrap(bg, fg, inner){
+  // tiled "background image" simulated with a CSS repeating pattern
+  const tile = `repeating-conic-gradient(${bg} 0% 25%, ${shade(bg,12)} 0% 50%)`;
+  return `<div style="background:${bg};background-image:${tile};background-size:24px 24px;color:${fg};min-height:90%;padding:14px">${inner}</div>`;
+}
+function shade(hex, amt){
+  // crude lighten for hex like #1a0033
+  if(!/^#[0-9a-f]{6}$/i.test(hex)) return hex;
+  let r=parseInt(hex.slice(1,3),16), g=parseInt(hex.slice(3,5),16), b=parseInt(hex.slice(5,7),16);
+  r=Math.min(255,r+amt); g=Math.min(255,g+amt); b=Math.min(255,b+amt);
+  return '#'+[r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('');
+}
+
+/* ============================================================
+   SEARCH ENGINE — only era-appropriate, in-world results
+   ============================================================ */
+const SEARCH_INDEX = [
+  { slug:'geocities/dragoncave', title:"Drakkar's Dragon Cave", desc:"Fantasy and adventure! A level 47 mage's lair of dragon lore. Enter the Bestiary if you dare.", kw:['dragon','dragons','fantasy','rpg','wyrm','mage','medieval','cave','drakkar'] },
+  { slug:'geocities/spice', title:"~*SpIcE gIrLs ShRiNe*~", desc:"GiRl PoWeR!!! The ultimate shrine to the best band ever. Sign my guestbook!", kw:['spice','spice girls','music','band','pop','wannabe','girl power','90s'] },
+  { slug:'geocities/xfiles', title:"THE TRUTH IS OUT THERE", desc:"CLASSIFIED. Aliens, Area 51, government cover-ups. Wake up sheeple.", kw:['ufo','ufos','alien','aliens','xfiles','x-files','conspiracy','area 51','roswell','truth','government'] },
+  { slug:'geocities/pixelpalace', title:"PixelPaul's Pixel Palace", desc:"Hand-crafted pixel art and ASCII gallery, made in MS Paint with love.", kw:['pixel','pixel art','art','ascii','ms paint','homepage','graphics'] },
+  { slug:'geocities/y2kbunker', title:"Y2K Survival Bunker", desc:"Days until the END: 1. Are you prepared for the millennium bug?", kw:['y2k','millennium','bug','survival','bunker','2000','end of the world','disaster'] },
+  { slug:'geocities/catlady', title:"Mittens' Magical Cat Kingdom", desc:"Brenda's homepage all about her 6 precious fur babies. Meow!", kw:['cat','cats','kitten','kittens','pets','mittens','animals','meow'] },
+  { slug:'geocities/skater', title:"xX SK8 KiNgDoM Xx", desc:"sk8 or die! Skateboarding and rock music. No posers allowed.", kw:['skate','skateboard','skater','sk8','punk','rock','blink-182','offspring','music'] },
+  { slug:'geocities/poetry', title:"~ Whispers of My Soul ~", desc:"A poetry collection by RavenMoon98. The language of the soul.", kw:['poetry','poem','poems','soul','dark','writing','raven','art'] },
+  { slug:'downloads', title:"Download Central - Shareware", desc:"Winamp, Netscape, ICQ, Napster, RealPlayer. The best shareware on the Net.", kw:['download','downloads','winamp','mp3','napster','icq','software','shareware','music','realplayer'] },
+  { slug:'mail', title:"HotMail - Free Web-Based Email", desc:"Check your free email anywhere. 2 MB of storage!", kw:['hotmail','mail','email','inbox','aol'] },
+  { slug:'chat', title:"WebChat 99 - Chat Rooms", desc:"23 users online in #general. Be excellent to each other.", kw:['chat','irc','aim','talk','rooms','webchat'] },
+  { slug:'home', title:"NetCentral - The Internet Portal", desc:"Your front door to the World Wide Web. Directory and search.", kw:['portal','directory','yahoo','altavista','search','net','internet','web','home'] }
+];
+
+function doSearch(q){
+  const query = q.toLowerCase().trim();
+  if(!query) return [];
+  const terms = query.split(/\s+/);
+  const scored = SEARCH_INDEX.map(item=>{
+    let score = 0;
+    const hay = (item.title+' '+item.desc+' '+item.kw.join(' ')).toLowerCase();
+    terms.forEach(t=>{
+      item.kw.forEach(k=>{ if(k===query) score+=10; });
+      if(hay.includes(t)) score += 3;
+      if(item.kw.some(k=>k.includes(t))) score += 2;
+    });
+    return { ...item, score };
+  }).filter(i=>i.score>0).sort((a,b)=>b.score-a.score);
+  return scored;
+}
+
+/* ============================================================
+   BROWSER ENGINE — history, navigation, status bar simulation
+   ============================================================ */
+const browser = {
+  history: [],
+  pos: -1,
+  current: null,
+  loadingTimer: null,
+};
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function parseSlug(target){
+  // target may be "search?q=ufo"
+  let slug = target, query=null;
+  const qi = target.indexOf('?');
+  if(qi>=0){
+    slug = target.slice(0,qi);
+    const params = new URLSearchParams(target.slice(qi+1));
+    query = params.get('q')||'';
+  }
+  return { slug, query };
+}
+
+function resolvePage(slug){
+  if(slug==='' || slug==='home') return 'home';
+  if(PAGES[slug]) return slug;
+  return null;
+}
+
+function navigate(target, pushHistory=true){
+  const { slug, query } = parseSlug(target);
+  const resolved = resolvePage(slug);
+  const ctx = { query, url:target };
+
+  // begin loading
+  beginLoading();
+
+  const pageKey = resolved || '404';
+  const loadTime = 500 + Math.floor(Math.random()*1200); // simulate 56k
+
+  // schedule render after fake load
+  browser.loadingTimer = setTimeout(()=>{
+    finishLoad(pageKey, ctx, target, pushHistory);
+  }, loadTime);
+
+  // progress animation
+  animateProgress(loadTime);
+}
+
+let progressTimer=null;
+function animateProgress(duration){
+  const bar = document.getElementById('sbBar');
+  const start = performance.now();
+  clearInterval(progressTimer);
+  progressTimer = setInterval(()=>{
+    const t = (performance.now()-start)/duration;
+    if(t>=1){ bar.style.width='100%'; clearInterval(progressTimer); return; }
+    bar.style.width = Math.min(98, Math.floor(t*100)) + '%';
+  }, 40);
+}
+
+function beginLoading(){
+  document.getElementById('docStatus').textContent = 'Document: Loading...';
+  document.getElementById('statusMsg').textContent = 'Connecting to host...';
+  document.getElementById('throbber').classList.add('spin');
+  document.getElementById('sbThrob').classList.add('spin');
+  document.getElementById('sbBar').style.width='5%';
+  document.getElementById('navStop').removeAttribute('disabled');
+  // staged status messages
+  setTimeout(()=>{ if(browser.loadingTimer) setStatus('Host contacted. Waiting for reply...'); }, 200);
+  setTimeout(()=>{ if(browser.loadingTimer) setStatus('Transferring data...'); }, 500);
+}
+function setStatus(msg){ document.getElementById('statusMsg').textContent = msg; }
+
+function finishLoad(pageKey, ctx, target, pushHistory){
+  const page = PAGES[pageKey];
+  // stop music from previous page, start this page's
+  stopMidi();
+  // render
+  const frame = document.getElementById('pageFrame');
+  frame.innerHTML = page.render(ctx);
+  document.getElementById('viewport').scrollTop = 0;
+
+  // address bar + title
+  document.title = page.title + ' - NetExplorer';
+  const displayUrl = (pageKey==='search' && ctx.query)
+      ? page.url + '?q=' + encodeURIComponent(ctx.query)
+      : (pageKey==='404' ? (ctx.url.startsWith('http')?ctx.url:'http://'+ctx.url) : page.url);
+  document.getElementById('address').value = displayUrl;
+  document.getElementById('secureSeg').textContent = '🔓';
+
+  // status bar done
+  clearInterval(progressTimer);
+  document.getElementById('sbBar').style.width='100%';
+  document.getElementById('docStatus').textContent = 'Document: Done';
+  document.getElementById('statusMsg').textContent = 'Done';
+  document.getElementById('throbber').classList.remove('spin');
+  document.getElementById('sbThrob').classList.remove('spin');
+  document.getElementById('navStop').setAttribute('disabled','');
+  setTimeout(()=>{ document.getElementById('sbBar').style.width='0%'; }, 600);
+
+  // history
+  if(pushHistory){
+    // trim forward history
+    browser.history = browser.history.slice(0, browser.pos+1);
+    browser.history.push({ target, pageKey });
+    browser.pos = browser.history.length-1;
+  }
+  browser.current = { target, pageKey };
+  browser.loadingTimer = null;
+
+  // start page midi
+  if(page.midi && soundOn){ startMidi(page.midi); }
+
+  // wire page-specific interactivity
+  wirePageEvents(pageKey, ctx);
+  updateNavButtons();
+}
+
+function updateNavButtons(){
+  const back = document.getElementById('navBack');
+  const fwd = document.getElementById('navFwd');
+  if(browser.pos>0) back.removeAttribute('disabled'); else back.setAttribute('disabled','');
+  if(browser.pos < browser.history.length-1) fwd.removeAttribute('disabled'); else fwd.setAttribute('disabled','');
+}
+
+function goBack(){
+  if(browser.pos<=0) return;
+  browser.pos--;
+  const h = browser.history[browser.pos];
+  navigate(h.target, false);
+}
+function goForward(){
+  if(browser.pos>=browser.history.length-1) return;
+  browser.pos++;
+  const h = browser.history[browser.pos];
+  navigate(h.target, false);
+}
+function stopLoading(){
+  if(browser.loadingTimer){ clearTimeout(browser.loadingTimer); browser.loadingTimer=null; }
+  clearInterval(progressTimer);
+  document.getElementById('throbber').classList.remove('spin');
+  document.getElementById('sbThrob').classList.remove('spin');
+  document.getElementById('docStatus').textContent = 'Document: Stopped';
+  document.getElementById('statusMsg').textContent = 'Stopped';
+  document.getElementById('sbBar').style.width='0%';
+  document.getElementById('navStop').setAttribute('disabled','');
+}
+
+/* ============================================================
+   PAGE-SPECIFIC EVENT WIRING (delegated where possible)
+   ============================================================ */
+function wirePageEvents(pageKey, ctx){
+  const frame = document.getElementById('pageFrame');
+
+  // status bar URL preview on link hover (Netscape feel)
+  frame.querySelectorAll('[data-nav]').forEach(a=>{
+    a.addEventListener('mouseenter', ()=>{
+      const t = a.getAttribute('data-nav');
+      const { slug } = parseSlug(t);
+      const p = PAGES[resolvePage(slug)] || null;
+      setStatus(p ? p.url : 'http://www.geocities.geo/'+slug);
+    });
+    a.addEventListener('mouseleave', ()=>{ if(!browser.loadingTimer) setStatus('Done'); });
+  });
+
+  // search box on homepage
+  const sb = document.getElementById('searchBox');
+  const sg = document.getElementById('searchGo');
+  if(sb && sg){
+    const run = ()=> navigate('search?q='+encodeURIComponent(sb.value));
+    sg.addEventListener('click', run);
+    sb.addEventListener('keydown', e=>{ if(e.key==='Enter') run(); });
+  }
+  const sb2 = document.getElementById('searchBox2');
+  const sg2 = document.getElementById('searchGo2');
+  if(sb2 && sg2){
+    const run = ()=> navigate('search?q='+encodeURIComponent(sb2.value));
+    sg2.addEventListener('click', run);
+    sb2.addEventListener('keydown', e=>{ if(e.key==='Enter') run(); });
+  }
+
+  // guestbook sign buttons
+  frame.querySelectorAll('[data-gb]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const slug = btn.getAttribute('data-gb');
+      const name = (document.getElementById('gbName')||{}).value || '';
+      const from = (document.getElementById('gbFrom')||{}).value || '';
+      const msg  = (document.getElementById('gbMsg')||{}).value || '';
+      if(!name.trim() || !msg.trim()){ alert('Please enter a name and a message!'); return; }
+      getGuestbook(slug).push({ name:name.trim(), from:from.trim()||'the Net', msg:msg.trim(), date:'12/31/1999' });
+      // re-render guestbook in place
+      const page = PAGES[slug];
+      document.getElementById('pageFrame').innerHTML = page.render(ctx);
+      wirePageEvents(slug, ctx);
+      // scroll to guestbook
+      const gb = document.getElementById('gbEntries');
+      if(gb) gb.scrollIntoView({block:'center'});
+    });
+  });
+
+  // midi toggle
+  frame.querySelectorAll('[data-midi]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const state = btn.querySelector('.midi-state');
+      if(midiPlaying){ stopMidi(); if(state) state.textContent='STOPPED'; }
+      else { startMidi(btn.getAttribute('data-midi')); if(state) state.textContent='PLAYING'; }
+    });
+  });
+
+  // mail rows
+  frame.querySelectorAll('[data-mail]').forEach(row=>{
+    row.addEventListener('click', ()=>{
+      const i = row.getAttribute('data-mail');
+      const body = document.getElementById('mailbody'+i);
+      if(body) body.style.display = (body.style.display==='none'?'table-row':'none');
+    });
+  });
+
+  // IRC page send
+  const ircInput = document.getElementById('ircInput');
+  const ircSend = document.getElementById('ircSend');
+  if(ircInput && ircSend){
+    const send = ()=>{
+      const v = ircInput.value.trim(); if(!v) return;
+      const log = document.getElementById('ircLog');
+      const d = document.createElement('div');
+      d.innerHTML = '&lt;<span style="color:#0f0">aiandy</span>&gt; '+escapeHtml(v);
+      log.appendChild(d); log.scrollTop = log.scrollHeight; ircInput.value='';
+      setTimeout(()=>{
+        const replies=['lol nice','a/s/l?','same tbh','brb phone','any1 got napster?','rofl','y2k is gonna be wild','cool site bro'];
+        const r=document.createElement('div');
+        r.innerHTML='&lt;<span style="color:#ff0">l33tHaxor</span>&gt; '+replies[Math.floor(Math.random()*replies.length)];
+        log.appendChild(r); log.scrollTop=log.scrollHeight;
+      }, 900+Math.random()*1200);
+    };
+    ircSend.addEventListener('click', send);
+    ircInput.addEventListener('keydown', e=>{ if(e.key==='Enter') send(); });
+  }
+}
+
+/* delegated nav clicks for the whole viewport */
+document.getElementById('viewport').addEventListener('click', e=>{
+  const a = e.target.closest('[data-nav]');
+  if(a){
+    e.preventDefault();
+    navigate(a.getAttribute('data-nav'));
+  }
+});
+
+/* ============================================================
+   TOOLBAR + ADDRESS BAR EVENTS
+   ============================================================ */
+document.getElementById('navBack').addEventListener('click', goBack);
+document.getElementById('navFwd').addEventListener('click', goForward);
+document.getElementById('navStop').addEventListener('click', stopLoading);
+document.getElementById('navReload').addEventListener('click', ()=>{ if(browser.current) navigate(browser.current.target, false); });
+document.getElementById('navHome').addEventListener('click', ()=> navigate('home'));
+document.getElementById('navSearch').addEventListener('click', ()=> navigate('search'));
+document.getElementById('navMail').addEventListener('click', ()=> navigate('mail'));
+document.getElementById('goBtn').addEventListener('click', goAddress);
+document.getElementById('address').addEventListener('keydown', e=>{ if(e.key==='Enter') goAddress(); });
+
+function goAddress(){
+  let v = document.getElementById('address').value.trim();
+  // map known in-world URLs back to slugs
+  const found = Object.keys(PAGES).find(k=> PAGES[k].url && (PAGES[k].url===v || PAGES[k].url===v+'/' || PAGES[k].url+'/'===v));
+  if(found){ navigate(found); return; }
+  if(/netcentral/i.test(v) || v==='' || /^http:\/\/(www\.)?$/.test(v)){ navigate('home'); return; }
+  // unknown → 404
+  navigate(v, true);
+}
+
+/* ============================================================
+   AIM CHAT (corner widget)
+   ============================================================ */
+const AIM_BOT = [
+  "yo aiandy u there?",
+  "this internet is wild in 99 huh",
+  "u check out the spice girls shrine yet? its fire",
+  "lol my mom keeps picking up the phone and killin my connection",
+  "did u sign my guestbook on the dragon cave?? plz do",
+  "y2k is gonna crash everything imo. i got beans stocked",
+  "brb getting a snack while this 12mb file downloads (40 min left)",
+  "g2g, AOL is kicking me off. cya online ✌"
+];
+let aimStep = 0;
+function aimAppend(who, cls, text){
+  const log = document.getElementById('aimLog');
+  const d = document.createElement('div');
+  d.innerHTML = `<span class="${cls}">${who}:</span> ${escapeHtml(text)}`;
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+}
+function aimBotMsg(){
+  if(aimStep>=AIM_BOT.length) return;
+  aimAppend('xXxModemRiderxXx','them', AIM_BOT[aimStep]);
+  aimStep++;
+  buzzLauncher();
+  if(aimStep<AIM_BOT.length){
+    setTimeout(aimBotMsg, 14000 + Math.random()*9000);
+  }
+}
+function buzzLauncher(){
+  const l = document.getElementById('aimLauncher');
+  if(l.classList.contains('show')){
+    l.classList.add('buzz');
+    setTimeout(()=>l.classList.remove('buzz'), 1000);
+    // play a little AIM door sound
+    aimDoorSound();
+  }
+}
+function aimDoorSound(){
+  const ctx = audio(); if(!ctx||!soundOn) return;
+  const o=ctx.createOscillator(), g=ctx.createGain();
+  o.type='sine'; o.frequency.setValueAtTime(900,ctx.currentTime);
+  o.frequency.exponentialRampToValueAtTime(300,ctx.currentTime+0.12);
+  g.gain.setValueAtTime(0.0001,ctx.currentTime);
+  g.gain.linearRampToValueAtTime(0.15,ctx.currentTime+0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001,ctx.currentTime+0.15);
+  o.connect(g); g.connect(ctx.destination); o.start(); o.stop(ctx.currentTime+0.16);
+}
+document.getElementById('aimSend').addEventListener('click', aimUserSend);
+document.getElementById('aimInput').addEventListener('keydown', e=>{ if(e.key==='Enter') aimUserSend(); });
+function aimUserSend(){
+  const inp = document.getElementById('aimInput');
+  const v = inp.value.trim(); if(!v) return;
+  aimAppend('aiandy','me', v); inp.value='';
+  setTimeout(()=>{
+    const replies=["lol yea","totally","no way!","haha","i dunno man","cool cool","brb","u seen the x-files page?","sign my guestbook!"];
+    aimAppend('xXxModemRiderxXx','them', replies[Math.floor(Math.random()*replies.length)]);
+    buzzLauncher();
+  }, 1200+Math.random()*1500);
+}
+document.getElementById('aimMin').addEventListener('click', ()=>{
+  document.getElementById('aim').classList.remove('show');
+  document.getElementById('aimLauncher').classList.add('show');
+});
+document.getElementById('aimLauncher').addEventListener('click', ()=>{
+  document.getElementById('aimLauncher').classList.remove('show','buzz');
+  document.getElementById('aim').classList.add('show');
+});
+
+/* ============================================================
+   BOOT SEQUENCE
+   ============================================================ */
+document.getElementById('soundToggle').addEventListener('click', ()=>{
+  soundOn = !soundOn;
+  document.getElementById('soundToggle').textContent = soundOn ? '🔊 Sound: ON' : '🔇 Sound: OFF';
+  if(!soundOn) stopMidi();
+});
+
+document.getElementById('connectBtn').addEventListener('click', startConnect);
+
+let connecting=false;
+function startConnect(){
+  if(connecting) return; connecting=true;
+  audio(); // unlock audio context on user gesture
+  const btn = document.getElementById('connectBtn');
+  btn.setAttribute('disabled',''); btn.style.color='#808080';
+  const status = document.getElementById('dialStatus');
+  const prog = document.getElementById('dialProg');
+  const inner = document.getElementById('dialProgInner');
+  prog.style.display='block';
+
+  const steps = [
+    ['Dialing 5550-NET-1999...', 6],
+    ['Dialing 5550-NET-1999...', 14],
+    ['Ring... Ring...', 28],
+    ['Modem handshaking...', 45],
+    ['Verifying username and password...', 62],
+    ['Connecting at 56,000 bps...', 80],
+    ['Connected at 53.3 Kbps!', 100],
+  ];
+
+  // play modem screech
+  modemHandshake();
+
+  let i=0;
+  const tick = setInterval(()=>{
+    if(i>=steps.length){
+      clearInterval(tick);
+      status.innerHTML = '<b style="color:#006600">✓ Connected at 53.3 Kbps</b> — Launching NetExplorer...';
+      setTimeout(launchBrowser, 1200);
+      return;
+    }
+    status.textContent = steps[i][0];
+    inner.style.width = steps[i][1] + '%';
+    i++;
+  }, 950);
+}
+
+function launchBrowser(){
+  document.getElementById('desktop').classList.add('hidden');
+  document.getElementById('browser').classList.add('show');
+  // show AIM launcher
+  document.getElementById('aimLauncher').classList.add('show');
+  // load homepage
+  navigate('home');
+  // kick off AIM buddy after a bit
+  setTimeout(()=>{ aimBotMsg(); }, 9000);
+}
+
+/* allow Enter on dialup to connect */
+document.getElementById('dialup').addEventListener('keydown', e=>{ if(e.key==='Enter') startConnect(); });
+
+</script>
+</body>
+</html>

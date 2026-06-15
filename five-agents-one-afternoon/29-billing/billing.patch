@@ -1,0 +1,2053 @@
+diff --git a/app.py b/app.py
+index c4f0b87..b2dfe8a 100644
+--- a/app.py
++++ b/app.py
+@@ -353,6 +353,10 @@ def init_db():
+         conn.execute("ALTER TABLE videos ADD COLUMN visual_tags TEXT")
+     except sqlite3.OperationalError:
+         pass
++    try:
++        conn.execute("ALTER TABLE videos ADD COLUMN writing_doc TEXT")
++    except sqlite3.OperationalError:
++        pass
+ 
+     # Background TTS jobs — async synthesis with progress tracking
+     conn.execute("""
+@@ -525,35 +529,23 @@ def _maybe_drop_videos_video_id_unique(conn):
+     create_sql = cur["sql"] or ""
+     if "video_id TEXT UNIQUE" not in create_sql:
+         return  # already migrated
+-    cols = [r["name"] for r in conn.execute("PRAGMA table_info(videos)")]
+-    col_csv = ", ".join(cols)
+-    # Build the new CREATE TABLE: same column ordering, but drop UNIQUE on
+-    # video_id. Other column-level constraints are preserved verbatim.
+-    new_create = (
+-        "CREATE TABLE videos_new (\n"
+-        "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+-        "    video_id TEXT NOT NULL,\n"
+-        "    title TEXT,\n"
+-        "    channel_title TEXT,\n"
+-        "    channel_thumb TEXT DEFAULT '',\n"
+-        "    thumbnail_url TEXT,\n"
+-        "    view_count INTEGER,\n"
+-        "    duration TEXT,\n"
+-        "    published_at TEXT,\n"
+-        "    status TEXT DEFAULT 'options',\n"
+-        "    outlier_score REAL DEFAULT 0,\n"
+-        "    channel_avg_views INTEGER DEFAULT 0,\n"
+-        "    added_at TEXT DEFAULT CURRENT_TIMESTAMP,\n"
+-        "    transformed INTEGER DEFAULT 0,\n"
+-        "    tucked INTEGER DEFAULT 0,\n"
+-        "    editor_state TEXT,\n"
+-        "    vocal_doc TEXT,\n"
+-        "    voiceover_state TEXT,\n"
+-        "    visuals_doc TEXT,\n"
+-        "    visual_tags TEXT,\n"
+-        "    user_id INTEGER REFERENCES users(id)\n"
+-        ")"
+-    )
++    cols = conn.execute("PRAGMA table_info(videos)").fetchall()
++    col_names = [r["name"] for r in cols]
++    col_csv = ", ".join(col_names)
++    # Rebuild the column defs verbatim from the live table, dropping ONLY the
++    # column-level UNIQUE on video_id (the whole point of this migration). FK /
++    # AUTOINCREMENT are intentionally not re-declared: PRAGMA foreign_keys is OFF
++    # in this codebase and rowids are copied explicitly below, so neither affects
++    # correctness. Robust to any future ALTER TABLE ADD COLUMN.
++    defs = []
++    for c in cols:
++        name, ctype = c["name"], (c["type"] or "")
++        notnull = "NOT NULL" if c["notnull"] else ""
++        default = f"DEFAULT {c['dflt_value']}" if c["dflt_value"] is not None else ""
++        pk = "PRIMARY KEY" if c["pk"] else ""
++        parts = [name, ctype, pk, notnull, default]
++        defs.append(" ".join(p for p in parts if p))
++    new_create = "CREATE TABLE videos_new (\n    " + ",\n    ".join(defs) + "\n)"
+     try:
+         conn.execute("BEGIN")
+         conn.execute(new_create)
+@@ -896,6 +888,14 @@ def login_required(f):
+     return decorated
+ 
+ 
++def _json_body():
++    """Parse the JSON request body, tolerating an absent or malformed body by
++    returning {}. This is the dominant body-parsing contract across the API:
++    force=True ignores the request Content-Type, silent=True returns None
++    (instead of raising) on invalid JSON, and `or {}` normalizes None to {}."""
++    return request.get_json(force=True, silent=True) or {}
++
++
+ @app.route("/api/editor-gate")
+ def editor_gate():
+     """Traefik forward-auth for the /editor router (the OpenCut video editor).
+@@ -1236,7 +1236,7 @@ def auth_skool_callback():
+     rejected; only `code` is honored and the member identity comes from
+     Skool's /member/me response.
+     """
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     code = (data.get("code") or "").strip()
+     if not code:
+         return jsonify({"error": "missing code"}), 400
+@@ -1370,7 +1370,7 @@ def _mint_dm_code(handle: str) -> dict:
+ def auth_dm_code_start():
+     """Frontend posts {handle}; backend mints a 6-digit code + returns
+     instructions for the user to DM SKOOL_DM_TARGET with that code."""
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     handle = (data.get("handle") or "").strip().lower()
+     handle = re.sub(r"^@", "", handle)
+     if not re.match(r"^[a-z0-9][a-z0-9._-]{1,38}$", handle):
+@@ -1493,7 +1493,7 @@ def auth_dm_code_admin_verify():
+     sent = (request.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
+     if not sent or sent != DM_VERIFY_TOKEN:
+         return jsonify({"error": "Unauthorized"}), 401
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     code = (data.get("code") or "").strip()
+     sender_handle = (data.get("sender_handle") or "").strip().lower().lstrip("@")
+     source = (data.get("source") or "chrome-ext").strip()[:32]
+@@ -1528,23 +1528,24 @@ def auth_dm_code_admin_verify():
+ 
+ # ── Email-based magic-code activation (the default login path) ───────
+ #
+-# Flow:
+-#   1. User joins skool.com/aimate (free 7-day trial OR paid).
++# Flow (Skool-allowlist gated; no trial):
++#   1. User joins skool.com/aimate (free community member OR paid). A Skool
++#      member question captures their email → Zapier writes it to Airtable →
++#      POST /api/admin/skool-members reconciles the allowlist (allowlisted=1).
+ #   2. Inside the Skool community, a pinned post links here:
+ #      "Activate your CreatorGrowth access" → /login overlay.
+ #   3. User enters Skool email → POST /api/auth/skool/request-code
+ #        - 6-digit code stored in login_codes, "emailed" to user.
+ #   4. User enters code → POST /api/auth/skool/activate { email, code }
+-#        - ADMIN_LOGIN_PASSWORD env override: typing that value bypasses
+-#          email verification (dev/test convenience).
+-#        - First time email: row created with allowlist_source='trial',
+-#          trial_end=now+7d.
+-#        - Already paid (set by Zap webhook below): just session-login.
+-#        - Was revoked: 403.
+-#   5. At day 7, before_request checks: if trial_end < now AND source still
+-#      'trial' (no Zap fire yet), flip to 'trial:expired' and 401 them.
+-#   6. When Skool charges them, Zap fires /api/admin/paid-members
+-#      → user flipped to 'paid', stays in forever.
++#        - ADMIN_LOGIN_PASSWORD env override bypasses email verification.
++#        - On the allowlist → session-login. Free members get the $1/mo budget
++#          tier; paid members (paid webhook) get $100/mo.
++#        - NOT on the allowlist → 403 "not a member". No trial is ever created.
++#   5. before_request gates every request on allowlisted=1 (the Airtable roster
++#      is the gate). No trial clock, no time-based revoke.
++#   6. When Skool charges them, the Zap fires /api/admin/paid-members
++#      → user flipped to tier='paid' ($100/mo). Cancellation is reconciled when
++#      they drop off the Airtable roster (manual weekly edit).
+ 
+ ADMIN_LOGIN_PASSWORD = os.environ.get("ADMIN_LOGIN_PASSWORD", "").strip()
+ LOGIN_CODE_TTL_SEC = int(os.environ.get("LOGIN_CODE_TTL_SEC", "600"))
+@@ -1565,41 +1566,23 @@ def _mint_login_code(conn, email: str) -> str:
+     return code
+ 
+ 
+-def _send_login_email(email: str, code: str) -> bool:
+-    """Send a 6-digit login code to `email`. Provider order:
+-      1. Resend HTTP API (if RESEND_API_KEY set) — production path.
+-      2. stderr log only — dev fallback when nothing's configured.
+-    Always returns True for the dev fallback (caller treats as 'sent').
+-    Returns False only when a configured provider explicitly fails."""
+-    # Always log to stderr — provides an audit trail + dev convenience.
+-    print(f"[login-code] email={email} code={code}  "
+-          f"(provider={'resend' if RESEND_API_KEY else 'stderr-only'})",
+-          file=sys.stderr, flush=True)
+-
++def _resend_send(to: str, subject: str, text: str, html: str, log_tag: str) -> bool:
++    """Send one email via the Resend HTTP API. Returns True on a 2xx response
++    OR when no RESEND_API_KEY is configured (dev fallback — the caller's stderr
++    log is the 'sent' record). Returns False only when a configured send
++    explicitly fails. Callers do their own pre-send diagnostic logging;
++    `log_tag` prefixes the transport-level error logs emitted here."""
+     if not RESEND_API_KEY:
+-        return True  # dev mode: log is "sent"
++        return True  # dev mode: caller's stderr log is "sent"
+ 
+     import urllib.request
+     import urllib.error
+     payload = json.dumps({
+         "from": RESEND_FROM,
+-        "to": [email],
+-        "subject": f"Your CreatorGrowth login code: {code}",
+-        "text": (
+-            f"Your CreatorGrowth login code is:\n\n"
+-            f"    {code}\n\n"
+-            f"This code expires in {LOGIN_CODE_TTL_SEC // 60} minutes. "
+-            f"If you didn't request this, you can ignore the email."
+-        ),
+-        "html": (
+-            f"<p>Your CreatorGrowth login code is:</p>"
+-            f"<p style=\"font-family:monospace;font-size:28px;letter-spacing:6px;"
+-            f"background:#f4f4f4;padding:16px 20px;border-radius:8px;display:inline-block\">"
+-            f"{code}</p>"
+-            f"<p style=\"color:#666;font-size:13px\">This code expires in "
+-            f"{LOGIN_CODE_TTL_SEC // 60} minutes. If you didn't request this, "
+-            f"you can ignore the email.</p>"
+-        ),
++        "to": [to],
++        "subject": subject,
++        "text": text,
++        "html": html,
+     }).encode("utf-8")
+     req = urllib.request.Request(
+         "https://api.resend.com/emails",
+@@ -1617,7 +1600,7 @@ def _send_login_email(email: str, code: str) -> bool:
+         with urllib.request.urlopen(req, timeout=10) as resp:
+             ok = 200 <= resp.status < 300
+             if not ok:
+-                print(f"[login-code] resend non-2xx: {resp.status}", file=sys.stderr, flush=True)
++                print(f"{log_tag} resend non-2xx: {resp.status}", file=sys.stderr, flush=True)
+             return ok
+     except urllib.error.HTTPError as e:
+         body = ""
+@@ -1625,13 +1608,45 @@ def _send_login_email(email: str, code: str) -> bool:
+             body = e.read().decode("utf-8", errors="replace")[:500]
+         except Exception:
+             pass
+-        print(f"[login-code] resend HTTPError {e.code}: {body}", file=sys.stderr, flush=True)
++        print(f"{log_tag} resend HTTPError {e.code}: {body}", file=sys.stderr, flush=True)
+         return False
+     except Exception as e:
+-        print(f"[login-code] resend error: {e}", file=sys.stderr, flush=True)
++        print(f"{log_tag} resend error: {e}", file=sys.stderr, flush=True)
+         return False
+ 
+ 
++def _send_login_email(email: str, code: str) -> bool:
++    """Send a 6-digit login code to `email`. Provider order:
++      1. Resend HTTP API (if RESEND_API_KEY set) — production path.
++      2. stderr log only — dev fallback when nothing's configured.
++    Always returns True for the dev fallback (caller treats as 'sent').
++    Returns False only when a configured provider explicitly fails."""
++    # Always log to stderr — provides an audit trail + dev convenience.
++    print(f"[login-code] email={email} code={code}  "
++          f"(provider={'resend' if RESEND_API_KEY else 'stderr-only'})",
++          file=sys.stderr, flush=True)
++    return _resend_send(
++        to=email,
++        subject=f"Your CreatorGrowth login code: {code}",
++        text=(
++            f"Your CreatorGrowth login code is:\n\n"
++            f"    {code}\n\n"
++            f"This code expires in {LOGIN_CODE_TTL_SEC // 60} minutes. "
++            f"If you didn't request this, you can ignore the email."
++        ),
++        html=(
++            f"<p>Your CreatorGrowth login code is:</p>"
++            f"<p style=\"font-family:monospace;font-size:28px;letter-spacing:6px;"
++            f"background:#f4f4f4;padding:16px 20px;border-radius:8px;display:inline-block\">"
++            f"{code}</p>"
++            f"<p style=\"color:#666;font-size:13px\">This code expires in "
++            f"{LOGIN_CODE_TTL_SEC // 60} minutes. If you didn't request this, "
++            f"you can ignore the email.</p>"
++        ),
++        log_tag="[login-code]",
++    )
++
++
+ def _send_team_invite_email(email: str, owner_email: str, owner_display: str = "") -> bool:
+     """Notify a freshly invited team member. Uses the same Resend transport as
+     the login code; falls back to stderr in dev. Best-effort — the caller
+@@ -1640,72 +1655,34 @@ def _send_team_invite_email(email: str, owner_email: str, owner_display: str = "
+     print(f"[team-invite] to={email} from_owner={owner_email}  "
+           f"(provider={'resend' if RESEND_API_KEY else 'stderr-only'})",
+           file=sys.stderr, flush=True)
+-
+-    if not RESEND_API_KEY:
+-        return True
+-
+-    subject = f"{inviter} added you to their CreatorGrowth workspace"
+-    body_text = (
+-        f"{inviter} ({owner_email}) added you to their CreatorGrowth workspace.\n\n"
+-        f"Sign in at https://creatorgrowth.com using THIS email address "
+-        f"({email}) and you'll land directly in their workspace — same ideas, "
+-        f"same scripts, same thumbnails.\n\n"
+-        f"If you weren't expecting this, you can ignore the email."
+-    )
+-    body_html = (
+-        f"<p>{inviter} (<a href=\"mailto:{owner_email}\">{owner_email}</a>) "
+-        f"added you to their CreatorGrowth workspace.</p>"
+-        f"<p>Sign in at <a href=\"https://creatorgrowth.com\">creatorgrowth.com</a> "
+-        f"using <strong>this</strong> email address (<code>{email}</code>) and "
+-        f"you'll land directly in their workspace — same ideas, same scripts, "
+-        f"same thumbnails.</p>"
+-        f"<p style=\"color:#666;font-size:13px\">If you weren't expecting this, "
+-        f"you can ignore the email.</p>"
+-    )
+-    import urllib.request
+-    import urllib.error
+-    payload = json.dumps({
+-        "from": RESEND_FROM,
+-        "to": [email],
+-        "subject": subject,
+-        "text": body_text,
+-        "html": body_html,
+-    }).encode("utf-8")
+-    req = urllib.request.Request(
+-        "https://api.resend.com/emails",
+-        data=payload,
+-        headers={
+-            "Authorization": f"Bearer {RESEND_API_KEY}",
+-            "Content-Type": "application/json",
+-            "User-Agent": "CreatorGrowth/1.0",
+-        },
+-        method="POST",
++    return _resend_send(
++        to=email,
++        subject=f"{inviter} added you to their CreatorGrowth workspace",
++        text=(
++            f"{inviter} ({owner_email}) added you to their CreatorGrowth workspace.\n\n"
++            f"Sign in at https://creatorgrowth.com using THIS email address "
++            f"({email}) and you'll land directly in their workspace — same ideas, "
++            f"same scripts, same thumbnails.\n\n"
++            f"If you weren't expecting this, you can ignore the email."
++        ),
++        html=(
++            f"<p>{inviter} (<a href=\"mailto:{owner_email}\">{owner_email}</a>) "
++            f"added you to their CreatorGrowth workspace.</p>"
++            f"<p>Sign in at <a href=\"https://creatorgrowth.com\">creatorgrowth.com</a> "
++            f"using <strong>this</strong> email address (<code>{email}</code>) and "
++            f"you'll land directly in their workspace — same ideas, same scripts, "
++            f"same thumbnails.</p>"
++            f"<p style=\"color:#666;font-size:13px\">If you weren't expecting this, "
++            f"you can ignore the email.</p>"
++        ),
++        log_tag="[team-invite]",
+     )
+-    try:
+-        with urllib.request.urlopen(req, timeout=10) as resp:
+-            ok = 200 <= resp.status < 300
+-            if not ok:
+-                print(f"[team-invite] resend non-2xx: {resp.status}",
+-                      file=sys.stderr, flush=True)
+-            return ok
+-    except urllib.error.HTTPError as e:
+-        body = ""
+-        try:
+-            body = e.read().decode("utf-8", errors="replace")[:500]
+-        except Exception:
+-            pass
+-        print(f"[team-invite] resend HTTPError {e.code}: {body}",
+-              file=sys.stderr, flush=True)
+-        return False
+-    except Exception as e:
+-        print(f"[team-invite] resend error: {e}", file=sys.stderr, flush=True)
+-        return False
+ 
+ 
+ @app.route("/api/auth/skool/request-code", methods=["POST"])
+ def auth_skool_request_code():
+     """Step 1 of email login. Accepts { email }, mints + 'sends' a 6-digit code."""
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     email = (data.get("email") or "").strip().lower()
+     if not email or "@" not in email or "." not in email:
+         return jsonify({"error": "Valid email required"}), 400
+@@ -1743,7 +1720,7 @@ def auth_skool_request_code():
+ @app.route("/api/auth/skool/activate", methods=["POST"])
+ def auth_skool_activate():
+     """Step 2 of email login. Accepts { email, code }, verifies, mints session."""
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     email = (data.get("email") or "").strip().lower()
+     code = (data.get("code") or "").strip()
+     if not email or "@" not in email or "." not in email:
+@@ -1784,14 +1761,13 @@ def auth_skool_activate():
+             # SAME code once the paid-member Zap lands — no new code needed.
+ 
+         row = conn.execute(
+-            "SELECT id, allowlisted, allowlist_source, revoked_at, trial_end "
+-            "FROM users WHERE email = ?",
++            "SELECT id, allowlisted FROM users WHERE email = ?",
+             (email,),
+         ).fetchone()
+ 
+         if _open_signup_enabled():
+-            # Self-host: no Skool, no trial, no revoke. Any email that gets
+-            # here is a permanent, fully-allowlisted user.
++            # Self-host: no Skool gate. Any email that gets here is a
++            # permanent, fully-allowlisted user.
+             if row is None:
+                 conn.execute(
+                     "INSERT INTO users (email, last_login, allowlisted, "
+@@ -1808,50 +1784,18 @@ def auth_skool_activate():
+             uid = conn.execute(
+                 "SELECT id FROM users WHERE email = ?", (email,)
+             ).fetchone()["id"]
+-        elif row is None:
+-            # New user → start 7-day trial. Skool's own trial timer runs in
+-            # parallel; if they convert, the Zap webhook flips them to 'paid'.
+-            conn.execute(
+-                "INSERT INTO users (email, last_login, allowlisted, "
+-                "allowlist_source, allowlisted_at, trial_end) "
+-                "VALUES (?, datetime('now'), 1, 'trial', datetime('now'), "
+-                "datetime('now', '+7 days'))",
+-                (email,),
+-            )
+-            conn.commit()
+-            uid = conn.execute(
+-                "SELECT id FROM users WHERE email = ?", (email,)
+-            ).fetchone()["id"]
+         else:
+-            uid = row["id"]
+-            if not row["allowlisted"]:
+-                # Not allowlisted → refuse, but tailor the copy to the member's
+-                # actual case so they know whether retrying will help. The code
+-                # is still 'pending' (consumption deferred), so for the "just
+-                # joined" case the same code can be re-submitted via Verify.
+-                src = row["allowlist_source"]
+-                if src == "trial:expired":
+-                    detail = ("Your 7-day free trial has ended. Re-join AI Mate "
+-                              "to keep your access, then sign in again here.")
+-                    can_retry = False
+-                elif row["revoked_at"]:
+-                    detail = ("We don't see an active AI Mate membership for this "
+-                              "email anymore. Re-join AI Mate, then sign in again.")
+-                    can_retry = False
+-                else:
+-                    # Known email, never activated — e.g. they just joined Skool
+-                    # and the paid-member Zap hasn't fired yet. Retrying the SAME
+-                    # code in a few seconds works once the webhook lands.
+-                    detail = ("We can't see an active AI Mate membership for this "
+-                              "email yet. If you just joined, wait ~30 seconds and "
+-                              "tap Verify again — no need to request a new code.")
+-                    can_retry = True
++            # Hosted mode: the Skool/Airtable allowlist is the ONLY gate.
++            # Unknown emails (no row) and non-allowlisted rows are both refused —
++            # no trial is created. The code stays 'pending' so a newly-joined
++            # member can retry with the same code once the webhook lands.
++            if row is None or not row["allowlisted"]:
+                 return jsonify({
+-                    "error": "Not active",
+-                    "detail": detail,
+-                    "can_retry": can_retry,
++                    "error": "not a member",
++                    "detail": "Join AI Mate on Skool to get access.",
+                     "join_url": "https://www.skool.com/aimate",
+                 }), 403
++            uid = row["id"]
+             conn.execute(
+                 "UPDATE users SET last_login = datetime('now') WHERE id = ?",
+                 (uid,),
+@@ -1902,7 +1846,7 @@ def admin_paid_members():
+     if not sent or sent != PAID_WEBHOOK_TOKEN:
+         return jsonify({"error": "Unauthorized"}), 401
+ 
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     email = (data.get("email") or "").strip().lower()
+     name = (data.get("name") or "").strip()
+     if not email or "@" not in email:
+@@ -1920,12 +1864,13 @@ def admin_paid_members():
+         # UPSERT: flip to paid. Clears trial_end and any revocation.
+         conn.execute(
+             "INSERT INTO users (email, display_name, allowlisted, "
+-            "allowlist_source, allowlisted_at, trial_end, last_login) "
+-            "VALUES (?, ?, 1, 'paid', datetime('now'), NULL, datetime('now')) "
++            "allowlist_source, tier, allowlisted_at, trial_end, last_login) "
++            "VALUES (?, ?, 1, 'paid', 'paid', datetime('now'), NULL, datetime('now')) "
+             "ON CONFLICT(email) DO UPDATE SET "
+             "  display_name = COALESCE(NULLIF(excluded.display_name, ''), users.display_name), "
+             "  allowlisted = 1, "
+             "  allowlist_source = 'paid', "
++            "  tier = 'paid', "
+             "  allowlisted_at = COALESCE(users.allowlisted_at, datetime('now')), "
+             "  trial_end = NULL, "
+             "  revoked_at = NULL",
+@@ -1937,6 +1882,68 @@ def admin_paid_members():
+         conn.close()
+ 
+ 
++@app.route("/api/admin/skool-members", methods=["POST"])
++def admin_skool_members():
++    """Airtable-driven membership reconcile. Token-authed (shared secret, same
++    as the paid webhook).
++
++    Body:
++      {"members":[{"email":...,"paid":bool?}...]}  — allowlist these (UPSERT).
++      {"revoke":["email",...]}                     — revoke these (skool/paid only).
++      {"reconcile": true}                          — opt-in FULL-ROSTER mode: also
++          revoke any skool/paid user ABSENT from `members`.
++
++    ADDITIVE BY DEFAULT: without `reconcile`, only the listed members/revokes are
++    touched — a single-record webhook (the per-answer Zapier→Airtable flow) can
++    NEVER wipe other members. Use `reconcile: true` only when sending the full
++    current roster. Revocation never touches seed/manual/legacy rows."""
++    sent = (request.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
++    token = os.environ.get("PAID_WEBHOOK_TOKEN", "")
++    if not token or sent != token:
++        return jsonify({"error": "Unauthorized"}), 401
++    data = _json_body()
++    members = data.get("members") or []
++    roster = {(m.get("email") or "").strip().lower() for m in members if m.get("email")}
++    paid_set = {(m.get("email") or "").strip().lower() for m in members if m.get("email") and m.get("paid")}
++    revoke = {(e or "").strip().lower() for e in (data.get("revoke") or []) if e}
++    reconcile = bool(data.get("reconcile"))
++    conn = get_db()
++    try:
++        for email in roster:
++            paid = email in paid_set
++            src = "paid" if paid else "skool"
++            tier = "paid" if paid else "free"
++            conn.execute(
++                "INSERT INTO users (email, allowlisted, allowlist_source, allowlisted_at, tier) "
++                "VALUES (?, 1, ?, datetime('now'), ?) "
++                "ON CONFLICT(email) DO UPDATE SET allowlisted=1, "
++                "  allowlist_source=?, revoked_at=NULL, "
++                "  allowlisted_at=COALESCE(users.allowlisted_at, datetime('now')), "
++                "  tier=CASE WHEN ?='paid' THEN 'paid' ELSE users.tier END",
++                (email, src, tier, src, tier),
++            )
++        to_revoke = set(revoke)
++        # Full-roster reconcile (opt-in): revoke skool/paid users absent from the
++        # supplied roster. Off by default so partial payloads stay additive.
++        if reconcile:
++            existing = conn.execute(
++                "SELECT email FROM users WHERE allowlisted=1 AND allowlist_source IN ('skool','paid')"
++            ).fetchall()
++            for row in existing:
++                if (row["email"] or "").lower() not in roster:
++                    to_revoke.add((row["email"] or "").lower())
++        # Revocation only ever touches skool/paid rows — never seed/manual/legacy.
++        for email in to_revoke:
++            conn.execute(
++                "UPDATE users SET allowlisted=0, tier='free', revoked_at=datetime('now') "
++                "WHERE email=? AND allowlist_source IN ('skool','paid')", (email,))
++        conn.commit()
++    finally:
++        conn.close()
++    return jsonify({"ok": True, "added": len(roster), "revoked": len(to_revoke),
++                    "reconcile": reconcile})
++
++
+ # ── Admin: impersonate user ───────────────────────────────────────────
+ #
+ # Lets admins (emails in ADMIN_EMAILS env) log in as any other user to
+@@ -1995,7 +2002,7 @@ def admin_impersonate():
+     admin_email, err = _require_admin()
+     if err:
+         return err
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     target_email = (data.get("email") or "").strip().lower()
+     if not target_email or "@" not in target_email:
+         return jsonify({"error": "Valid email required"}), 400
+@@ -2133,7 +2140,7 @@ def team_invite():
+     workspace_uid, err = _require_workspace_owner()
+     if err:
+         return err
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     email = (data.get("email") or "").strip().lower()
+     if not email or "@" not in email or "." not in email:
+         return jsonify({"error": "Valid email required"}), 400
+@@ -2290,7 +2297,7 @@ def uploads_presign():
+     if not S3_BUCKET:
+         return jsonify({"error": "S3 not configured on server"}), 503
+     uid = current_user_id()
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     filename = (data.get("filename") or "").strip()
+     kind = (data.get("kind") or "generic").strip()[:32]
+     content_type = (data.get("content_type") or "application/octet-stream").strip()[:128]
+@@ -2333,7 +2340,7 @@ def uploads_presign():
+ @app.route("/api/uploads/<int:upload_id>/finalize", methods=["POST"])
+ def uploads_finalize(upload_id):
+     uid = current_user_id()
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     try:
+         size_bytes = int(data.get("size_bytes") or 0)
+     except (TypeError, ValueError):
+@@ -2451,16 +2458,15 @@ def _user_api_key(uid, field: str) -> str:
+ 
+ 
+ def _user_youtube_key(uid) -> str:
+-    """Per-user YouTube Data API key, falling back to the shared global key.
+-    Per-user keys avoid one shared quota being exhausted across all members."""
+-    return _user_api_key(uid, "youtube_api_key") or YOUTUBE_API_KEY
++    """Server YouTube Data API key. All AI calls run on the owner's server key
++    so that budget metering covers every request — no BYO fallback."""
++    return os.environ.get("YOUTUBE_API_KEY", "")
+ 
+ 
+ def _user_gemini_key(uid) -> str:
+-    """Per-user Gemini API key, falling back to the shared global key. The
+-    thumbnail/image-gen routes hammer Gemini; a member's own key keeps one
+-    member's usage from rate-limiting everyone else."""
+-    return _user_api_key(uid, "gemini_api_key") or os.environ.get("GEMINI_API_KEY", "")
++    """Server Gemini API key. All AI calls run on the owner's server key so
++    that budget metering covers every request — no BYO fallback."""
++    return os.environ.get("GEMINI_API_KEY", "")
+ 
+ 
+ def _user_aws_creds(uid) -> dict:
+@@ -2501,6 +2507,36 @@ def _mask_key(val: str) -> str:
+     return "…" + val[-4:]
+ 
+ 
++def _email_for_uid(conn, uid) -> str:
++    """Lowercased email for a users.id, or '' if unknown."""
++    if uid is None:
++        return ""
++    row = conn.execute("SELECT email FROM users WHERE id = ?", (uid,)).fetchone()
++    return (row["email"] or "").lower() if row else ""
++
++
++# NOTE — TOCTOU limitation: the pre-check / post-charge pattern below has a
++# race window. Concurrent requests from the same user can both pass can_afford()
++# before either records spend, allowing marginal overshoot of the cap. This is
++# acceptable at current scale; a true fix would require per-user serialization or
++# an atomic check-and-reserve (e.g. a DB-level advisory lock or compare-and-swap).
++def require_budget(conn, uid, action, qty=1):
++    """Return None if `uid` can afford `action`*qty this period, else a
++    (response, 402) tuple the caller returns directly. Admin/owner is exempt."""
++    if _is_admin_email(_email_for_uid(conn, uid)):
++        return None
++    if ub.can_afford(conn, uid, action, qty):
++        return None
++    s = ub.usage_summary(conn, uid)
++    return jsonify({
++        "error": "budget_exhausted",
++        "tier": s["tier"], "used_cents": s["used_cents"],
++        "cap_cents": s["cap_cents"], "remaining_cents": s["remaining_cents"],
++        "resets": s["resets"], "upgrade_url": "https://www.skool.com/aimate",
++        "upgrade": True,
++    }), 402
++
++
+ @app.route("/api/usage")
+ @login_required
+ def api_usage():
+@@ -2543,7 +2579,7 @@ def settings_api_keys_post():
+     uid = current_user_id()
+     if uid is None:
+         return jsonify({"error": "Unauthorized"}), 401
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     updates = {f: data[f] for f in (_API_KEY_FIELDS + _API_CONFIG_FIELDS) if f in data}
+     if not updates:
+         return jsonify({"error": "no recognized api-key fields"}), 400
+@@ -2670,7 +2706,7 @@ def settings_tab_config_post():
+     uid = current_user_id()
+     if uid is None:
+         return jsonify({"error": "Unauthorized"}), 401
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     tabs = data.get("tabs")
+     if not tabs:
+         stored = None  # reset to default
+@@ -2720,7 +2756,7 @@ def settings_prompt_presets_post():
+     uid = current_user_id()
+     if uid is None:
+         return jsonify({"error": "Unauthorized"}), 401
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     updates = {kind: data[kind] for kind in _PROMPT_PRESET_KINDS if kind in data}
+     if not updates:
+         return jsonify({"error": "no recognized preset kinds"}), 400
+@@ -2761,7 +2797,7 @@ def final_pass_rulebook_post():
+     uid = current_user_id()
+     if uid is None:
+         return jsonify({"error": "Unauthorized"}), 401
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     text = (data.get("rulebook") or "").strip() or None  # empty → NULL
+     conn = get_db()
+     try:
+@@ -2812,7 +2848,7 @@ def settings_description_template_post():
+     uid = current_user_id()
+     if uid is None:
+         return jsonify({"error": "Unauthorized"}), 401
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     standard = (data.get("standard") or "").strip()
+     conn = get_db()
+     try:
+@@ -3018,6 +3054,8 @@ def require_auth():
+         return None
+     if path == "/api/admin/paid-members":
+         return None
++    if path == "/api/admin/skool-members":
++        return None
+     if not session.get("authenticated"):
+         return jsonify({"error": "Unauthorized"}), 401
+     # Stale-session repair: pre-schema-change cookies passed `authenticated=True`
+@@ -3054,69 +3092,22 @@ def require_auth():
+     if _open_signup_enabled():
+         return None
+ 
+-    # Live allowlist re-check + trial-expiry — runs on every authed request.
+-    # Cancelled or expired members get 401 on their very next hit.
++    # Live allowlist re-check — runs on every authed request.
++    # Non-members (not in the Skool/Airtable allowlist) get 401 on every hit.
+     if uid is not None:
+         conn = get_db()
+         try:
+             row = conn.execute(
+-                "SELECT allowlisted, allowlist_source, trial_end, allowlisted_at "
+-                "FROM users WHERE id = ?", (uid,)
++                "SELECT allowlisted FROM users WHERE id = ?", (uid,)
+             ).fetchone()
+-            # Trial-expiry sweep: if source is still 'trial' (Zap hasn't flipped
+-            # them to 'paid') and trial_end has passed, revoke now. After this,
+-            # the allowlisted check below will fire the 401.
+-            if (row is not None
+-                    and row["allowlisted"]
+-                    and row["allowlist_source"] == "trial"
+-                    and row["trial_end"]):
+-                # Defense-in-depth: a legit trial_end is allowlisted_at + 7d, i.e.
+-                # strictly AFTER the trial start. A trial_end that predates the
+-                # start is corrupt import data (the 2026-05-28 import seeded it
+-                # from users' old Skool join dates and insta-revoked 40+ members)
+-                # — never lock someone out on that; log it for cleanup instead.
+-                chk = conn.execute(
+-                    "SELECT datetime(?) < datetime('now') AS past, "
+-                    "       datetime(?) > datetime(COALESCE(?, '0001-01-01')) AS sane",
+-                    (row["trial_end"], row["trial_end"], row["allowlisted_at"]),
+-                ).fetchone()
+-                if chk["past"] and chk["sane"]:
+-                    conn.execute(
+-                        "UPDATE users SET allowlisted = 0, "
+-                        "allowlist_source = 'trial:expired', "
+-                        "revoked_at = datetime('now') WHERE id = ?",
+-                        (uid,),
+-                    )
+-                    conn.commit()
+-                    row = conn.execute(
+-                        "SELECT allowlisted, allowlist_source, trial_end, allowlisted_at "
+-                        "FROM users WHERE id = ?", (uid,)
+-                    ).fetchone()
+-                elif chk["past"] and not chk["sane"]:
+-                    print(f"[TRIAL-CORRUPT] skip-revoke user_id={uid} "
+-                          f"trial_end={row['trial_end']} "
+-                          f"allowlisted_at={row['allowlisted_at']}", flush=True)
+         finally:
+             conn.close()
+         if row is None or not row["allowlisted"]:
+-            # TEMP DIAG (2026-06-01, intermittent-logout hunt): record which
+-            # account got de-authed and why. Remove once root cause is found.
+-            print(f"[AUTH-401] allowlist-fail path={request.path} "
+-                  f"user_id={uid} identity={session.get('identity_user_id')} "
+-                  f"row={'None' if row is None else 'present'} "
+-                  f"source={(row['allowlist_source'] if row else None)} "
+-                  f"trial_end={(row['trial_end'] if row else None)}", flush=True)
+             session.clear()
+-            source = row["allowlist_source"] if row else None
+-            if source == "trial:expired":
+-                return jsonify({
+-                    "error": "trial expired",
+-                    "detail": "Your 7-day trial has ended. Join AI Mate to continue.",
+-                    "join_url": "https://www.skool.com/aimate",
+-                }), 401
+             return jsonify({
+-                "error": "access revoked",
+-                "detail": "Your Skool membership is no longer active. Re-up to continue.",
++                "error": "not a member",
++                "detail": "Join AI Mate on Skool to get access.",
++                "join_url": "https://www.skool.com/aimate",
+             }), 401
+ 
+ 
+@@ -3220,48 +3211,30 @@ def _owns_via_video(table: str, id_col: str, row_id, video_id_col: str = "video_
+     return row is not None
+ 
+ 
+-def video_owner_required(f):
+-    """Decorator: 404s when the current user doesn't own the path-param `vid`."""
+-    @wraps(f)
+-    def decorated(*args, **kwargs):
+-        vid = kwargs.get("vid")
+-        if vid is not None and not _owns_scoped("videos", "id", vid):
+-            return jsonify({"error": "not found"}), 404
+-        return f(*args, **kwargs)
+-    return decorated
+-
+-
+-def diagram_owner_required(f):
+-    """Decorator: 404s when the current user doesn't own the diagram via its parent video."""
+-    @wraps(f)
+-    def decorated(*args, **kwargs):
+-        diagram_id = kwargs.get("diagram_id")
+-        if diagram_id is not None and not _owns_via_video("diagrams", "id", diagram_id):
+-            return jsonify({"error": "not found"}), 404
+-        return f(*args, **kwargs)
+-    return decorated
+-
+-
+-def channel_owner_required(f):
+-    """Decorator: 404s when the current user doesn't own the channel."""
+-    @wraps(f)
+-    def decorated(*args, **kwargs):
+-        cid = kwargs.get("cid")
+-        if cid is not None and not _owns_scoped("channels", "id", cid):
+-            return jsonify({"error": "not found"}), 404
+-        return f(*args, **kwargs)
+-    return decorated
+-
+-
+-def show_doc_owner_required(f):
+-    """Decorator: 404s when the current user doesn't own the show_doc."""
+-    @wraps(f)
+-    def decorated(*args, **kwargs):
+-        sid = kwargs.get("sid")
+-        if sid is not None and not _owns_scoped("show_docs", "id", sid):
+-            return jsonify({"error": "not found"}), 404
+-        return f(*args, **kwargs)
+-    return decorated
++def _owner_required(kwarg: str, owns):
++    """Build an ownership-gate decorator that 404s when the current user doesn't
++    own the row named by path-param `kwarg`. `owns(row_id) -> bool` runs the
++    actual check (a user_id-scoped table lookup, or a join-via-video lookup for
++    child tables). The `is not None` guard mirrors the original per-resource
++    decorators: a missing path param falls through to the handler unchecked."""
++    def wrapper(f):
++        @wraps(f)
++        def decorated(*args, **kwargs):
++            row_id = kwargs.get(kwarg)
++            if row_id is not None and not owns(row_id):
++                return jsonify({"error": "not found"}), 404
++            return f(*args, **kwargs)
++        return decorated
++    return wrapper
++
++
++# 404 when the current user doesn't own the path-param resource. Videos,
++# channels and show_docs carry their own user_id (_owns_scoped); diagrams
++# cascade ownership from their parent video (_owns_via_video).
++video_owner_required = _owner_required("vid", lambda i: _owns_scoped("videos", "id", i))
++diagram_owner_required = _owner_required("diagram_id", lambda i: _owns_via_video("diagrams", "id", i))
++channel_owner_required = _owner_required("cid", lambda i: _owns_scoped("channels", "id", i))
++show_doc_owner_required = _owner_required("sid", lambda i: _owns_scoped("show_docs", "id", i))
+ 
+ 
+ def extract_video_id(url: str) -> str | None:
+@@ -4426,7 +4399,7 @@ def factory_sort_decision():
+     if err:
+         return err
+     uid = current_user_id()
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     source = (data.get("source") or "competitor").strip().lower()
+     decision = (data.get("decision") or "").strip().lower()
+ 
+@@ -4788,6 +4761,10 @@ def factory_faceless():
+     n = max(1, min(n, 6))
+ 
+     conn = get_db()
++    guard = require_budget(conn, uid, "image_pro", n)
++    if guard:
++        conn.close()
++        return guard
+     try:
+         row = conn.execute(
+             "SELECT * FROM factory_items WHERE id = ? AND user_id = ?", (item_id, uid)
+@@ -4826,31 +4803,32 @@ def factory_faceless():
+             results[i] = {"png": png, "error": gerr, "title": pick[i]}
+ 
+     conn = get_db()
+-    state = _read_video_thumb_state(conn, card_vid)
+-    if state is None:
+-        conn.close()
+-        return jsonify({"error": "card not found"}), 404
+-    _ctitle, thumbs, ctitles, drow = state
+-    empty = _allocate_thumb_slots(thumbs, ctitles, n)
+-    out_root = UPLOAD_DIR / "thumbs" / str(card_vid)
+-    out_root.mkdir(parents=True, exist_ok=True)
+-    ts = int(time.time())
+-    written, failures = [], []
+-    for vi, res in enumerate(results):
+-        slot = empty[vi]
+-        if res and res["png"]:
+-            p = out_root / f"factory_faceless_{ts}_{vi + 1}.png"
+-            p.write_bytes(res["png"])
+-            url = "/" + str(p.relative_to(Path(app.root_path))).replace(os.sep, "/")
+-            thumbs[slot] = url
+-            written.append({"slot_index": slot, "slot_label": slot + 1, "url": url})
+-        else:
+-            failures.append({"slot_label": slot + 1, "error": (res or {}).get("error") or "unknown"})
+-    if not written:
++    try:
++        state = _read_video_thumb_state(conn, card_vid)
++        if state is None:
++            return jsonify({"error": "card not found"}), 404
++        _ctitle, thumbs, ctitles, drow = state
++        empty = _allocate_thumb_slots(thumbs, ctitles, n)
++        out_root = UPLOAD_DIR / "thumbs" / str(card_vid)
++        out_root.mkdir(parents=True, exist_ok=True)
++        ts = int(time.time())
++        written, failures = [], []
++        for vi, res in enumerate(results):
++            slot = empty[vi]
++            if res and res["png"]:
++                p = out_root / f"factory_faceless_{ts}_{vi + 1}.png"
++                p.write_bytes(res["png"])
++                url = "/" + str(p.relative_to(Path(app.root_path))).replace(os.sep, "/")
++                thumbs[slot] = url
++                written.append({"slot_index": slot, "slot_label": slot + 1, "url": url})
++            else:
++                failures.append({"slot_label": slot + 1, "error": (res or {}).get("error") or "unknown"})
++        if not written:
++            return jsonify({"error": "all gemini calls failed", "failures": failures}), 502
++        _persist_thumb_state(conn, card_vid, thumbs, ctitles, drow)
++        ub.record_spend(conn, uid, "image_pro", len(written))
++    finally:
+         conn.close()
+-        return jsonify({"error": "all gemini calls failed", "failures": failures}), 502
+-    _persist_thumb_state(conn, card_vid, thumbs, ctitles, drow)
+-    conn.close()
+     return jsonify({"ok": True, "kind": "faceless", "count": len(written),
+                     "requested": n, "thumbs": written, "failures": failures})
+ 
+@@ -5071,7 +5049,7 @@ def new_card_from_thumb():
+     uid = session.get("user_id")
+     if uid is None:
+         return jsonify({"error": "Unauthorized"}), 401
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     url = (data.get("url") or "").strip()
+     title = (data.get("title") or "").strip()
+     status = (data.get("status") or "best").strip() or "best"
+@@ -6032,27 +6010,12 @@ def backfill_views():
+     return jsonify({"backfilled": updated, "remaining": remaining})
+ 
+ 
+-@app.route("/api/videos/sync-published", methods=["POST"])
+-def sync_published():
+-    """Refresh view_count + published_at for every video with status='published'
+-    by batching YouTube Data API v3 videos.list calls (50 IDs per call).
+-    Scoped to the current user."""
+-    uid = _request_user_id()
+-    if uid is None:
+-        return jsonify({"error": "Unauthorized"}), 401
+-    if not YOUTUBE_API_KEY:
+-        return jsonify({"error": "YOUTUBE_API_KEY not configured"}), 500
+-    conn = get_db()
+-    rows = conn.execute(
+-        "SELECT id, video_id FROM videos WHERE user_id = ? AND status = 'published' "
+-        "AND video_id IS NOT NULL AND video_id != ''",
+-        (uid,),
+-    ).fetchall()
+-    if not rows:
+-        conn.close()
+-        return jsonify({"updated": 0, "total": 0})
+-
+-    id_to_row = {r["video_id"]: r["id"] for r in rows}
++def _sync_youtube_stats(conn, id_to_row):
++    """Batch the YouTube Data API v3 videos.list call (50 ids per request) for
++    the given {youtube_video_id: videos.id} map, updating view_count,
++    outlier_score, channel_avg_views and (when the API returns one) published_at
++    on each matched row. Returns the number of rows updated. The caller owns the
++    connection lifecycle and the commit."""
+     ids = list(id_to_row.keys())
+     updated = 0
+     channel_avg_cache: dict[str, int] = {}
+@@ -6087,9 +6050,34 @@ def sync_published():
+                 (view_count, outlier, channel_avg, published_at, id_to_row[vid]),
+             )
+             updated += 1
++    return updated
++
++
++@app.route("/api/videos/sync-published", methods=["POST"])
++def sync_published():
++    """Refresh view_count + published_at for every video with status='published'
++    by batching YouTube Data API v3 videos.list calls (50 IDs per call).
++    Scoped to the current user."""
++    uid = _request_user_id()
++    if uid is None:
++        return jsonify({"error": "Unauthorized"}), 401
++    if not YOUTUBE_API_KEY:
++        return jsonify({"error": "YOUTUBE_API_KEY not configured"}), 500
++    conn = get_db()
++    rows = conn.execute(
++        "SELECT id, video_id FROM videos WHERE user_id = ? AND status = 'published' "
++        "AND video_id IS NOT NULL AND video_id != ''",
++        (uid,),
++    ).fetchall()
++    if not rows:
++        conn.close()
++        return jsonify({"updated": 0, "total": 0})
++
++    id_to_row = {r["video_id"]: r["id"] for r in rows}
++    updated = _sync_youtube_stats(conn, id_to_row)
+     conn.commit()
+     conn.close()
+-    return jsonify({"updated": updated, "total": len(ids)})
++    return jsonify({"updated": updated, "total": len(id_to_row)})
+ 
+ 
+ @app.route("/api/videos/sync-ids", methods=["POST"])
+@@ -6117,40 +6105,7 @@ def sync_ids():
+         return jsonify({"updated": 0, "total": len(requested_ids)})
+ 
+     id_to_row = {r["video_id"]: r["id"] for r in rows}
+-    ids = list(id_to_row.keys())
+-    updated = 0
+-    channel_avg_cache: dict[str, int] = {}
+-    for i in range(0, len(ids), 50):
+-        chunk = ids[i:i + 50]
+-        try:
+-            api_url = (
+-                "https://www.googleapis.com/youtube/v3/videos"
+-                f"?part=snippet,statistics&id={','.join(chunk)}&key={YOUTUBE_API_KEY}"
+-            )
+-            with urlopen(api_url, timeout=20) as resp:
+-                payload = json.loads(resp.read().decode("utf-8"))
+-        except Exception:
+-            continue
+-        for item in payload.get("items", []):
+-            vid = item.get("id")
+-            if not vid or vid not in id_to_row:
+-                continue
+-            stats = item.get("statistics", {})
+-            view_count = int(stats.get("viewCount", 0) or 0)
+-            snippet = item.get("snippet", {})
+-            channel_id = snippet.get("channelId", "")
+-            published_at = snippet.get("publishedAt", "")
+-            if channel_id and channel_id not in channel_avg_cache:
+-                channel_url = f"https://www.youtube.com/channel/{channel_id}"
+-                channel_avg_cache[channel_id] = fetch_channel_avg_views(channel_url)
+-            channel_avg = channel_avg_cache.get(channel_id, 0)
+-            outlier = round(view_count / channel_avg, 1) if channel_avg > 0 else 0.0
+-            conn.execute(
+-                "UPDATE videos SET view_count = ?, outlier_score = ?, channel_avg_views = ?, "
+-                "published_at = COALESCE(NULLIF(?, ''), published_at) WHERE id = ?",
+-                (view_count, outlier, channel_avg, published_at, id_to_row[vid]),
+-            )
+-            updated += 1
++    updated = _sync_youtube_stats(conn, id_to_row)
+     conn.commit()
+     conn.close()
+     return jsonify({"updated": updated, "total": len(requested_ids)})
+@@ -6402,7 +6357,7 @@ def video_presign(vid):
+     creds = _user_aws_creds(uid)
+     if not creds.get("bucket"):
+         return jsonify({"error": "No S3 bucket configured — add your AWS S3 key in Settings."}), 400
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     filename = (data.get("filename") or "").strip()
+     content_type = (data.get("content_type") or "video/mp4").strip()[:128]
+     if not filename:
+@@ -6427,7 +6382,7 @@ def video_presign(vid):
+ @app.route("/api/videos/<int:vid>/video-finalize", methods=["POST"])
+ @video_owner_required
+ def video_finalize(vid):
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     key = (data.get("key") or "").strip()
+     if not key:
+         return jsonify({"error": "key required"}), 400
+@@ -6890,6 +6845,13 @@ def video_ai_score(vid):
+     if not api_key:
+         return jsonify({"error": "No Gemini API key — add one in Settings.", "prereqs": prereqs}), 400
+ 
++    bconn = get_db()
++    guard = require_budget(bconn, uid, "claude_review", 1)
++    if guard:
++        bconn.close()
++        return guard
++    bconn.close()
++
+     packaging = story = prediction = thumb_ranking = None
+     errors = {}
+ 
+@@ -6993,11 +6955,14 @@ def video_ai_score(vid):
+                  "generated_at": datetime.now(timezone.utc).isoformat()}
+     # Cache on meta (re-read fresh to merge, since the Gemini calls took a while).
+     conn = get_db()
+-    meta2, _ = _details_meta(conn, vid)
+-    meta2["score"] = score_obj
+-    _save_details_meta(conn, vid, meta2)
+-    conn.commit()
+-    conn.close()
++    try:
++        meta2, _ = _details_meta(conn, vid)
++        meta2["score"] = score_obj
++        _save_details_meta(conn, vid, meta2)
++        conn.commit()
++        ub.record_spend(conn, uid, "claude_review", 1)
++    finally:
++        conn.close()
+ 
+     return jsonify({"status": "scored", "prereqs": prereqs, "errors": errors, **score_obj})
+ 
+@@ -7027,7 +6992,7 @@ def publish_queue_order_post():
+     uid = current_user_id()
+     if uid is None:
+         return jsonify({"error": "Unauthorized"}), 401
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     raw = data.get("order") or []
+     try:
+         order = [int(x) for x in raw][:500]
+@@ -7049,7 +7014,7 @@ def publish_queue_order_post():
+ def video_schedule(vid):
+     """Set or clear a card's planned date. Plan-only — nothing auto-publishes;
+     Andy still hits Publish when ready. Body: {"date": "YYYY-MM-DD"} or {"date": null}."""
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     raw = data.get("date")
+     sched = None
+     if raw:
+@@ -7212,7 +7177,7 @@ def push_card():
+     uid = _api_token_user_id()
+     if uid is None:
+         return jsonify({"error": "Unauthorized", "detail": "Provide a valid card-push token in the Authorization: Bearer header."}), 401
+-    data = request.get_json(force=True, silent=True) or {}
++    data = _json_body()
+     title = (data.get("title") or "").strip()
+     if not title:
+         return jsonify({"error": "title is required"}), 400
+@@ -9351,7 +9316,7 @@ def diagrams_get(diagram_id):
+ @app.route("/api/diagrams/<diagram_id>", methods=["PATCH"])
+ @diagram_owner_required
+ def diagrams_patch(diagram_id):
+-    payload = request.get_json(force=True, silent=True) or {}
++    payload = _json_body()
+     fields = []
+     values = []
+     if "name" in payload:
+@@ -10443,7 +10408,7 @@ def chapter_get(vid):
+ @app.route("/api/videos/<int:vid>/chapter", methods=["PUT"])
+ @video_owner_required
+ def chapter_put(vid):
+-    payload = request.get_json(force=True, silent=True) or {}
++    payload = _json_body()
+     items = payload.get("items", [])
+     if not isinstance(items, list):
+         return jsonify({"error": "items must be a list"}), 400
+@@ -10752,7 +10717,7 @@ def get_vocal_doc(vid):
+ @app.route("/api/videos/<int:vid>/vocal-doc", methods=["POST"])
+ @video_owner_required
+ def save_vocal_doc(vid):
+-    body = request.get_json(force=True, silent=True) or {}
++    body = _json_body()
+     text = body.get("vocal_doc", "")
+     conn = get_db()
+     conn.execute("UPDATE videos SET vocal_doc=? WHERE id=?", (text, vid))
+@@ -10773,7 +10738,7 @@ def generate_vocal_doc(vid):
+     if not api_key:
+         return jsonify({"error": "GEMINI_API_KEY not set"}), 500
+ 
+-    body = request.get_json(force=True, silent=True) or {}
++    body = _json_body()
+     content_doc = (body.get("content_doc") or "").strip()
+     if not content_doc:
+         conn = get_db()
+@@ -10870,7 +10835,7 @@ def get_visuals_doc(vid):
+ @app.route("/api/videos/<int:vid>/visuals-doc", methods=["POST"])
+ @video_owner_required
+ def save_visuals_doc(vid):
+-    body = request.get_json(force=True, silent=True) or {}
++    body = _json_body()
+     text = body.get("visuals_doc", "")
+     conn = get_db()
+     conn.execute("UPDATE videos SET visuals_doc=? WHERE id=?", (text, vid))
+@@ -11174,7 +11139,7 @@ def get_visual_tags(vid):
+ @app.route("/api/videos/<int:vid>/visual-tags", methods=["POST"])
+ @video_owner_required
+ def save_visual_tags(vid):
+-    body = request.get_json(force=True, silent=True) or {}
++    body = _json_body()
+     tags = _sanitize_visual_tags(body.get("tags"))
+     conn = get_db()
+     conn.execute(
+@@ -11310,7 +11275,7 @@ def auto_suggest_visual_tags(vid):
+     Body: {replace: bool=true}  // replace prior auto-tag types (diagram,
+     avatar, screen, text_anim). Manual `chapters` tags are preserved.
+     """
+-    body = request.get_json(force=True, silent=True) or {}
++    body = _json_body()
+     replace = bool(body.get("replace", True))
+ 
+     conn = get_db()
+@@ -12461,7 +12426,7 @@ def _tts_job_get(job_id):
+     return dict(row) if row else None
+ 
+ 
+-def _tts_run(job_id, vid, text, voice_id, model_id, api_key, segments=None):
++def _tts_run(job_id, vid, text, voice_id, model_id, api_key, segments=None, uid=None):
+     """Background worker — synthesize chunks via ElevenLabs (with-timestamps),
+     stitch, save, persist voiceover_state including step segments + alignment.
+ 
+@@ -12606,6 +12571,11 @@ def _tts_run(job_id, vid, text, voice_id, model_id, api_key, segments=None):
+         state.setdefault("generations", []).append(generation)
+         _save_voiceover_state(vid, state)
+ 
++        if uid is not None:
++            sconn = get_db()
++            ub.record_spend(sconn, uid, "tts_voiceover", 1)
++            sconn.close()
++
+         _tts_job_set(job_id, status="done", generation_json=json.dumps(generation))
+     except Exception as e:
+         _tts_job_set(job_id, status="error", error=f"{type(e).__name__}: {e}")
+@@ -12623,7 +12593,7 @@ def synthesize_say(vid):
+     if not api_key:
+         return jsonify({"error": "ELEVENLABS_API_KEY not set on server"}), 500
+ 
+-    body = request.get_json(force=True, silent=True) or {}
++    body = _json_body()
+     raw_text = (body.get("text") or "").strip()
+     if not raw_text:
+         conn = get_db()
+@@ -12664,6 +12634,14 @@ def synthesize_say(vid):
+     model_id = (body.get("model_id") or os.environ.get("ELEVENLABS_MODEL_ID")
+                 or "eleven_multilingual_v2").strip()
+ 
++    uid = current_user_id()
++    bconn = get_db()
++    guard = require_budget(bconn, uid, "tts_voiceover", 1)
++    if guard:
++        bconn.close()
++        return guard
++    bconn.close()
++
+     job_id = uuid.uuid4().hex[:12]
+     now = time.time()
+     conn = get_db()
+@@ -12676,6 +12654,7 @@ def synthesize_say(vid):
+ 
+     t = threading.Thread(target=_tts_run,
+                          args=(job_id, vid, text, voice_id, model_id, api_key, segments),
++                         kwargs={"uid": uid},
+                          daemon=True)
+     t.start()
+ 
+@@ -13302,7 +13281,7 @@ def diagrams_generate_batch(vid):
+     api_key = os.environ.get("GEMINI_API_KEY", "")
+     if not api_key:
+         return jsonify({"error": "GEMINI_API_KEY not set on server"}), 500
+-    body = request.get_json(force=True, silent=True) or {}
++    body = _json_body()
+     briefs = body.get("briefs") or _derive_diagram_briefs(vid)
+     briefs = [b for b in briefs if isinstance(b, dict) and (b.get("brief") or "").strip()]
+     if not briefs:
+@@ -13320,6 +13299,14 @@ def diagrams_generate_batch(vid):
+     if len(briefs) > 12:
+         briefs = briefs[:12]
+ 
++    uid = current_user_id()
++    conn = get_db()
++    guard = require_budget(conn, uid, "image_pro", len(briefs))
++    if guard:
++        conn.close()
++        return guard
++    conn.close()
++
+     # Replace prior auto-generated diagrams for this video (anything named
+     # "Step N: ...") so we don't accumulate stale duplicates each click.
+     # Manually-named diagrams (Diagram 1, etc.) are left untouched.
+@@ -13380,28 +13367,32 @@ def diagrams_generate_batch(vid):
+     # Persist successful ones as diagram rows
+     conn = get_db()
+     conn.row_factory = sqlite3.Row
+-    pos_row = conn.execute(
+-        "SELECT COALESCE(MAX(position), -1) + 1 AS p FROM diagrams WHERE video_id=?",
+-        (vid,)
+-    ).fetchone()
+-    base_pos = pos_row[0] if pos_row else 0
+-    created = []
+-    failures = 0
+-    now = datetime.now(timezone.utc).isoformat()
+-    for i, r in enumerate(results):
+-        if not r or not r[1]:
+-            failures += 1
+-            continue
+-        b, diagram_id, rel = r
+-        conn.execute(
+-            "INSERT INTO diagrams (id, video_id, name, boxes_json, image_path, position, created_at, updated_at) "
+-            "VALUES (?,?,?,?,?,?,?,?)",
+-            (diagram_id, vid, b["name"], "[]", rel, base_pos + i, now, now),
+-        )
+-        row = conn.execute("SELECT * FROM diagrams WHERE id=?", (diagram_id,)).fetchone()
+-        created.append(_diagram_row_to_dict(row))
+-    conn.commit()
+-    conn.close()
++    try:
++        pos_row = conn.execute(
++            "SELECT COALESCE(MAX(position), -1) + 1 AS p FROM diagrams WHERE video_id=?",
++            (vid,)
++        ).fetchone()
++        base_pos = pos_row[0] if pos_row else 0
++        created = []
++        failures = 0
++        now = datetime.now(timezone.utc).isoformat()
++        for i, r in enumerate(results):
++            if not r or not r[1]:
++                failures += 1
++                continue
++            b, diagram_id, rel = r
++            conn.execute(
++                "INSERT INTO diagrams (id, video_id, name, boxes_json, image_path, position, created_at, updated_at) "
++                "VALUES (?,?,?,?,?,?,?,?)",
++                (diagram_id, vid, b["name"], "[]", rel, base_pos + i, now, now),
++            )
++            row = conn.execute("SELECT * FROM diagrams WHERE id=?", (diagram_id,)).fetchone()
++            created.append(_diagram_row_to_dict(row))
++        conn.commit()
++        if created:
++            ub.record_spend(conn, uid, "image_pro", len(created))
++    finally:
++        conn.close()
+ 
+     return jsonify({
+         "created": created,
+@@ -13544,7 +13535,12 @@ def diagram_regenerate(diagram_id):
+     api_key = os.environ.get("GEMINI_API_KEY", "")
+     if not api_key:
+         return jsonify({"error": "GEMINI_API_KEY not set"}), 500
++    uid = current_user_id()
+     conn = get_db()
++    guard = require_budget(conn, uid, "image_pro", 1)
++    if guard:
++        conn.close()
++        return guard
+     conn.row_factory = sqlite3.Row
+     row = conn.execute("SELECT * FROM diagrams WHERE id=?", (diagram_id,)).fetchone()
+     if not row:
+@@ -13599,6 +13595,7 @@ def diagram_regenerate(diagram_id):
+                  (rel, now, diagram_id))
+     conn.commit()
+     row = conn.execute("SELECT * FROM diagrams WHERE id=?", (diagram_id,)).fetchone()
++    ub.record_spend(conn, uid, "image_pro", 1)
+     conn.close()
+     out = _diagram_row_to_dict(row)
+     # Echo back what the planner saw + produced so the UI can show it for debugging.
+@@ -13619,7 +13616,12 @@ def diagram_pixel_art(diagram_id):
+     api_key = os.environ.get("GEMINI_API_KEY", "")
+     if not api_key:
+         return jsonify({"error": "GEMINI_API_KEY not set"}), 500
++    uid = current_user_id()
+     conn = get_db()
++    guard = require_budget(conn, uid, "image_pro", 1)
++    if guard:
++        conn.close()
++        return guard
+     conn.row_factory = sqlite3.Row
+     row = conn.execute("SELECT * FROM diagrams WHERE id=?", (diagram_id,)).fetchone()
+     if not row:
+@@ -13658,6 +13660,7 @@ def diagram_pixel_art(diagram_id):
+                  (rel, now, diagram_id))
+     conn.commit()
+     row = conn.execute("SELECT * FROM diagrams WHERE id=?", (diagram_id,)).fetchone()
++    ub.record_spend(conn, uid, "image_pro", 1)
+     conn.close()
+     return jsonify(_diagram_row_to_dict(row))
+ 
+@@ -13867,9 +13870,10 @@ def _gemini_thumb_direct(vid, *, kind, prompt_builder, slug):
+     """
+     from concurrent.futures import ThreadPoolExecutor
+     import base64
+-    # C0: prefer the signed-in member's own Gemini key (global key = fallback) so
+-    # heavy thumbnail generation on one account doesn't rate-limit everyone.
+-    api_key = _user_gemini_key(current_user_id())
++    # C0: runs on the server Gemini key (BYO keys were dropped; budget metering
++    # covers usage so heavy generation doesn't go untracked).
++    uid = current_user_id()
++    api_key = _user_gemini_key(uid)
+     if not api_key:
+         return jsonify({"error": "No Gemini API key — add yours in Settings → API Keys to generate thumbnails."}), 400
+ 
+@@ -13882,6 +13886,10 @@ def _gemini_thumb_direct(vid, *, kind, prompt_builder, slug):
+     nudge = (body.get("nudge") or "").strip()
+ 
+     conn = get_db()
++    guard = require_budget(conn, uid, "image_pro", n)
++    if guard:
++        conn.close()
++        return guard
+     state = _read_video_thumb_state(conn, vid)
+     if state is None:
+         conn.close()
+@@ -13962,6 +13970,7 @@ def _gemini_thumb_direct(vid, *, kind, prompt_builder, slug):
+         }), 502
+ 
+     _persist_thumb_state(conn, vid, thumbs, titles, drow_exists)
++    ub.record_spend(conn, uid, "image_pro", len(written))
+     conn.close()
+     return jsonify({
+         "ok": True,
+@@ -14110,7 +14119,7 @@ def _compose_faceless_prompt(preset_text, title, nudge=""):
+ @login_required
+ @video_owner_required
+ def generate_thumb(vid):
+-    """Faceless thumbnails on the user's OWN Replicate key + transparent prompt.
++    """Faceless thumbnails on the server Replicate token + transparent prompt.
+     Body: {kind:'faceless', count, nudge, prompt_override?}."""
+     from concurrent.futures import ThreadPoolExecutor
+     body = request.get_json(silent=True) or {}
+@@ -14127,25 +14136,20 @@ def generate_thumb(vid):
+ 
+     uid = current_user_id()
+     conn = get_db()
++    guard = require_budget(conn, uid, "image_flux", n)
++    if guard:
++        conn.close()
++        return guard
+     krow = conn.execute(
+-        "SELECT replicate_api_key, fal_api_key, prompt_preset_faceless "
+-        "FROM users WHERE id=?", (uid,),
++        "SELECT prompt_preset_faceless FROM users WHERE id=?", (uid,),
+     ).fetchone()
+-    rep_key = (krow["replicate_api_key"] if krow else None) or ""
+-    fal_key = (krow["fal_api_key"] if krow else None) or ""
++    rep_key = os.environ.get("REPLICATE_API_TOKEN", "")
+     if not rep_key:
+         conn.close()
+-        if fal_key:
+-            return jsonify({
+-                "error": "thumb_key_required",
+-                "detail": "Fal AI generation is coming next — add a Replicate "
+-                          "token in Settings → API Keys to generate now.",
+-            }), 403
+         return jsonify({
+-            "error": "thumb_key_required",
+-            "detail": "Add your Replicate (or Fal) API key in Settings → API "
+-                      "Keys to generate thumbnails.",
+-        }), 403
++            "error": "thumb_unavailable",
++            "detail": "Thumbnail generation is not configured on this server.",
++        }), 503
+ 
+     state = _read_video_thumb_state(conn, vid)
+     if state is None:
+@@ -14191,11 +14195,13 @@ def generate_thumb(vid):
+         return jsonify({"error": "all replicate calls failed", "failures": failures}), 502
+ 
+     _persist_thumb_state(conn, vid, thumbs, titles, drow_exists)
++    produced = len(written)
++    ub.record_spend(conn, uid, "image_flux", produced)
+     conn.close()
+     return jsonify({
+         "ok": True,
+         "kind": "faceless",
+-        "count": len(written),
++        "count": produced,
+         "requested": n,
+         "thumbs": written,
+         "failures": failures,
+@@ -14497,7 +14503,7 @@ def get_editor_state(vid):
+ @app.route("/api/videos/<int:vid>/editor", methods=["POST"])
+ @video_owner_required
+ def save_editor_state(vid):
+-    body = request.get_json(force=True, silent=True) or {}
++    body = _json_body()
+     payload = json.dumps(body)
+     conn = get_db()
+     conn.execute("UPDATE videos SET editor_state=? WHERE id=?", (payload, vid))
+@@ -15032,6 +15038,15 @@ def _replicate_remove_bg(image_bytes, model="bria"):
+ def thumb_edit_remove_bg():
+     """Remove background from a flattened canvas image.
+     Multipart: image (PNG), model (str, optional: bria|birefnet|rembg-enhance). Returns PNG with alpha."""
++    uid = current_user_id()
++    if uid is None:
++        return jsonify({"error": "Unauthorized"}), 401
++    conn = get_db()
++    guard = require_budget(conn, uid, "image_flux", 1)
++    if guard:
++        conn.close()
++        return guard
++    conn.close()
+     img_f = request.files.get("image")
+     if not img_f:
+         return jsonify({"error": "missing image"}), 400
+@@ -15039,6 +15054,9 @@ def thumb_edit_remove_bg():
+     out = _replicate_remove_bg(img_f.read(), model=model)
+     if not out:
+         return jsonify({"error": "remove-bg failed (check server logs)"}), 502
++    conn = get_db()
++    ub.record_spend(conn, uid, "image_flux", 1)
++    conn.close()
+     from flask import send_file
+     import io
+     return send_file(io.BytesIO(out), mimetype="image/png", download_name="no_bg.png")
+@@ -15049,6 +15067,15 @@ def thumb_edit_inpaint():
+     """Right-click inpaint from miniPaint.
+     Multipart: image (PNG), mask (PNG, white=fill), prompt (str, optional).
+     Returns PNG bytes."""
++    uid = current_user_id()
++    if uid is None:
++        return jsonify({"error": "Unauthorized"}), 401
++    conn = get_db()
++    guard = require_budget(conn, uid, "image_flux", 1)
++    if guard:
++        conn.close()
++        return guard
++    conn.close()
+     img_f = request.files.get("image")
+     mask_f = request.files.get("mask")
+     if not img_f or not mask_f:
+@@ -15059,6 +15086,9 @@ def thumb_edit_inpaint():
+     out = _replicate_flux_fill(image_bytes, mask_bytes, prompt)
+     if not out:
+         return jsonify({"error": "inpaint failed (check server logs)"}), 502
++    conn = get_db()
++    ub.record_spend(conn, uid, "image_flux", 1)
++    conn.close()
+     from flask import send_file
+     import io
+     return send_file(io.BytesIO(out), mimetype="image/png", download_name="inpaint.png")
+diff --git a/tests/test_budget_enforcement.py b/tests/test_budget_enforcement.py
+new file mode 100644
+index 0000000..773ce84
+--- /dev/null
++++ b/tests/test_budget_enforcement.py
+@@ -0,0 +1,197 @@
++import io
++import usage_budget as ub
++
++
++def _seed_tier(db, uid, tier, used=0):
++    db.execute("UPDATE users SET tier=?, usage_cents=?, usage_period=strftime('%Y-%m','now') "
++               "WHERE id=?", (tier, used, uid))
++    db.commit()
++
++
++def _max_out(db, uid):
++    db.execute("UPDATE users SET tier='free', usage_cents=?, usage_period=? WHERE id=?",
++               (ub.TIER_CAP['free'], ub.current_period(), uid))
++    db.commit()
++
++
++def _seed_owned_video(db, uid, title="Test Video"):
++    cur = db.execute(
++        "INSERT INTO videos (video_id, title, user_id) VALUES (?, ?, ?)",
++        (f"vid_{uid}_{title[:4]}", title, uid),
++    )
++    db.commit()
++    return cur.lastrowid
++
++
++def _seed_owned_diagram(db, vid, image_path="static/uploads/diagrams/1/test.png"):
++    import uuid
++    did = "d" + uuid.uuid4().hex[:14]
++    db.execute(
++        "INSERT INTO diagrams (id, video_id, name, boxes_json, image_path, position) "
++        "VALUES (?, ?, ?, '[]', ?, 0)",
++        (did, vid, "Step 1: Test", image_path),
++    )
++    db.commit()
++    return did
++
++
++# ── Core unit tests ───────────────────────────────────────────────────────────
++
++def test_require_budget_allows_under_cap(app_module, db, seed_user):
++    uid = seed_user("free1@x.com", "free1")
++    _seed_tier(db, uid, "free", used=0)
++    with app_module.app.test_request_context():
++        conn = app_module.get_db()
++        assert app_module.require_budget(conn, uid, "image_pro", 1) is None  # 20c <= 100c
++        conn.close()
++
++
++def test_require_budget_blocks_over_cap_with_402(app_module, db, seed_user):
++    uid = seed_user("free2@x.com", "free2")
++    _seed_tier(db, uid, "free", used=95)            # 95c used, cap 100c
++    with app_module.app.test_request_context():
++        conn = app_module.get_db()
++        guard = app_module.require_budget(conn, uid, "image_pro", 1)  # +20c -> over
++        conn.close()
++    assert guard is not None
++    resp, status = guard
++    assert status == 402
++    body = resp.get_json()
++    assert body["error"] == "budget_exhausted"
++    assert body["remaining_cents"] == 5
++    assert body["cap_cents"] == 100
++
++
++def test_admin_is_never_blocked(app_module, db, seed_user, monkeypatch):
++    uid = seed_user("admin@x.com", "adm")
++    _seed_tier(db, uid, "free", used=999)
++    monkeypatch.setattr(app_module, "_is_admin_email", lambda e: True)
++    with app_module.app.test_request_context():
++        conn = app_module.get_db()
++        assert app_module.require_budget(conn, uid, "image_pro", 1) is None
++        conn.close()
++
++
++def test_ai_keys_are_server_only(app_module, db, seed_user, monkeypatch):
++    uid = seed_user("byo@x.com", "byo")
++    db.execute("UPDATE users SET gemini_api_key='USERKEY', youtube_api_key='USERYT' WHERE id=?", (uid,))
++    db.commit()
++    monkeypatch.setenv("GEMINI_API_KEY", "SERVERKEY")
++    monkeypatch.setenv("YOUTUBE_API_KEY", "SERVERYT")
++    assert app_module._user_gemini_key(uid) == "SERVERKEY"
++    assert app_module._user_youtube_key(uid) == "SERVERYT"
++
++
++# ── 402 block tests — one per paid-AI endpoint ───────────────────────────────
++
++# NOTE: factory_faceless, gemini_faceless, gemini_pixel_face are admin-only
++# routes (require _is_admin_email to pass the gate before any budget check).
++# Admins are budget-exempt in require_budget, so the 402 path is structurally
++# unreachable for these routes. Budget metering (record_spend) is still wired
++# in for spend-tracking purposes when admins do use them.
++
++
++def test_diagram_pixel_art_402_when_budget_exhausted(client, seed_user, login_as, db, monkeypatch):
++    monkeypatch.setenv("GEMINI_API_KEY", "testkey")
++    uid = seed_user("u@x.com", "u1")
++    login_as("u@x.com")
++    vid = _seed_owned_video(db, uid)
++    did = _seed_owned_diagram(db, vid)
++    _max_out(db, uid)
++    r = client.post(f"/api/diagrams/{did}/pixel-art")
++    assert r.status_code == 402
++    body = r.get_json()
++    assert body["error"] == "budget_exhausted"
++    used_after = db.execute("SELECT usage_cents FROM users WHERE id=?", (uid,)).fetchone()["usage_cents"]
++    assert used_after == ub.TIER_CAP['free']
++
++
++def test_diagram_regenerate_402_when_budget_exhausted(client, seed_user, login_as, db, monkeypatch):
++    monkeypatch.setenv("GEMINI_API_KEY", "testkey")
++    uid = seed_user("u@x.com", "u1")
++    login_as("u@x.com")
++    vid = _seed_owned_video(db, uid)
++    did = _seed_owned_diagram(db, vid)
++    _max_out(db, uid)
++    r = client.post(f"/api/diagrams/{did}/regenerate")
++    assert r.status_code == 402
++    body = r.get_json()
++    assert body["error"] == "budget_exhausted"
++    used_after = db.execute("SELECT usage_cents FROM users WHERE id=?", (uid,)).fetchone()["usage_cents"]
++    assert used_after == ub.TIER_CAP['free']
++
++
++def test_diagrams_generate_batch_402_when_budget_exhausted(client, seed_user, login_as, db, monkeypatch):
++    monkeypatch.setenv("GEMINI_API_KEY", "testkey")
++    uid = seed_user("u@x.com", "u1")
++    login_as("u@x.com")
++    vid = _seed_owned_video(db, uid)
++    _max_out(db, uid)
++    briefs = [{"name": "Step 1: Intro", "brief": "Intro", "body": "intro body"}]
++    r = client.post(f"/api/videos/{vid}/diagrams/generate-batch", json={"briefs": briefs})
++    assert r.status_code == 402
++    body = r.get_json()
++    assert body["error"] == "budget_exhausted"
++    used_after = db.execute("SELECT usage_cents FROM users WHERE id=?", (uid,)).fetchone()["usage_cents"]
++    assert used_after == ub.TIER_CAP['free']
++
++
++def test_thumb_edit_remove_bg_402_when_budget_exhausted(client, seed_user, login_as, db):
++    uid = seed_user("u@x.com", "u1")
++    login_as("u@x.com")
++    _max_out(db, uid)
++    png_bytes = b"\x89PNG\r\n\x1a\n_fake_"
++    data = {"image": (io.BytesIO(png_bytes), "test.png", "image/png")}
++    r = client.post("/api/thumb-edit/remove-bg",
++                    data=data, content_type="multipart/form-data")
++    assert r.status_code == 402
++    body = r.get_json()
++    assert body["error"] == "budget_exhausted"
++    used_after = db.execute("SELECT usage_cents FROM users WHERE id=?", (uid,)).fetchone()["usage_cents"]
++    assert used_after == ub.TIER_CAP['free']
++
++
++def test_thumb_edit_inpaint_402_when_budget_exhausted(client, seed_user, login_as, db):
++    uid = seed_user("u@x.com", "u1")
++    login_as("u@x.com")
++    _max_out(db, uid)
++    png_bytes = b"\x89PNG\r\n\x1a\n_fake_"
++    data = {
++        "image": (io.BytesIO(png_bytes), "test.png", "image/png"),
++        "mask": (io.BytesIO(png_bytes), "mask.png", "image/png"),
++    }
++    r = client.post("/api/thumb-edit/inpaint",
++                    data=data, content_type="multipart/form-data")
++    assert r.status_code == 402
++    body = r.get_json()
++    assert body["error"] == "budget_exhausted"
++    used_after = db.execute("SELECT usage_cents FROM users WHERE id=?", (uid,)).fetchone()["usage_cents"]
++    assert used_after == ub.TIER_CAP['free']
++
++
++def test_video_ai_score_402_when_budget_exhausted(client, seed_user, login_as, db, monkeypatch):
++    monkeypatch.setenv("GEMINI_API_KEY", "testkey")
++    uid = seed_user("u@x.com", "u1")
++    login_as("u@x.com")
++    vid = _seed_owned_video(db, uid)
++    _max_out(db, uid)
++    r = client.post(f"/api/videos/{vid}/ai-score")
++    assert r.status_code == 402
++    body = r.get_json()
++    assert body["error"] == "budget_exhausted"
++    used_after = db.execute("SELECT usage_cents FROM users WHERE id=?", (uid,)).fetchone()["usage_cents"]
++    assert used_after == ub.TIER_CAP['free']
++
++
++def test_synthesize_say_402_when_budget_exhausted(client, seed_user, login_as, db, monkeypatch):
++    monkeypatch.setenv("ELEVENLABS_API_KEY", "testkey")
++    uid = seed_user("u@x.com", "u1")
++    login_as("u@x.com")
++    vid = _seed_owned_video(db, uid)
++    _max_out(db, uid)
++    r = client.post(f"/api/videos/{vid}/say/synthesize", json={"text": "hello world"})
++    assert r.status_code == 402
++    body = r.get_json()
++    assert body["error"] == "budget_exhausted"
++    used_after = db.execute("SELECT usage_cents FROM users WHERE id=?", (uid,)).fetchone()["usage_cents"]
++    assert used_after == ub.TIER_CAP['free']
+diff --git a/tests/test_email_activation.py b/tests/test_email_activation.py
+index c1b8701..1a07590 100644
+--- a/tests/test_email_activation.py
++++ b/tests/test_email_activation.py
+@@ -1,33 +1,25 @@
+ """Email-based activation + paid-member webhook tests.
+ 
+ The new default auth path:
+-  /api/auth/skool/activate {email} → 7-day trial, session, allowlisted=1
++  /api/auth/skool/activate {email} → login for allowlisted members only
+   /api/admin/paid-members  {email, name} → UPSERT, flips to 'paid', NULL trial_end
+ 
+-before_request enforces trial-expiry: if trial_end < now and source still
+-'trial', flip to 'trial:expired' and 401.
++Non-allowlisted emails are refused with 403 — no trial is created.
+ """
+ 
+ 
+-def test_activate_new_user_starts_trial(client, db):
++def test_activate_unknown_email_is_refused(client, db):
++    # An email not in the allowlist must be refused — no trial row created.
+     r = client.post("/api/auth/skool/activate", json={"code": "admin", "email": "new@example.com"})
+-    assert r.status_code == 200
++    assert r.status_code == 403
+     body = r.get_json()
+-    assert body["ok"] is True
+-    assert body["email"] == "new@example.com"
++    assert "join_url" in body
+ 
+     row = db.execute(
+-        "SELECT allowlisted, allowlist_source, trial_end FROM users WHERE email = ?",
++        "SELECT allowlisted FROM users WHERE email = ?",
+         ("new@example.com",),
+     ).fetchone()
+-    assert row["allowlisted"] == 1
+-    assert row["allowlist_source"] == "trial"
+-    assert row["trial_end"] is not None
+-
+-    # Session is live: subsequent authed request succeeds
+-    r = client.get("/api/auth-status")
+-    assert r.status_code == 200
+-    assert r.get_json()["authenticated"] is True
++    assert row is None or row["allowlisted"] == 0
+ 
+ 
+ def test_activate_rejects_invalid_email(client):
+@@ -91,15 +83,14 @@ def test_paid_webhook_creates_new_paid_user(client, db):
+     assert log["name"] == "Fresh Convert"
+ 
+ 
+-def test_paid_webhook_upgrades_trial_user_to_paid(client, db):
+-    # User starts a trial, then Skool fires new_paid_member
+-    client.post("/api/auth/skool/activate", json={"code": "admin", "email": "convert@example.com"})
+-    row = db.execute(
+-        "SELECT allowlist_source, trial_end FROM users WHERE email = ?",
+-        ("convert@example.com",),
+-    ).fetchone()
+-    assert row["allowlist_source"] == "trial"
+-    assert row["trial_end"] is not None
++def test_paid_webhook_upgrades_existing_allowlisted_user_to_paid(client, db):
++    # An allowlisted user (e.g. seeded via Airtable sync) gets upgraded to 'paid'
++    # when Skool fires new_paid_member.
++    db.execute(
++        "INSERT INTO users (email, allowlisted, allowlist_source, allowlisted_at) "
++        "VALUES ('convert@example.com', 1, 'skool', datetime('now'))"
++    )
++    db.commit()
+ 
+     r = client.post(
+         "/api/admin/paid-members",
+@@ -140,30 +131,6 @@ def test_paid_webhook_unrevokes_churned_user(client, db):
+     assert row["revoked_at"] is None
+ 
+ 
+-def test_trial_expiry_revokes_on_next_request(client, db):
+-    # Start trial then artificially backdate trial_end to the past
+-    client.post("/api/auth/skool/activate", json={"code": "admin", "email": "stale@example.com"})
+-    db.execute(
+-        "UPDATE users SET trial_end = datetime('now', '-1 hour') WHERE email = ?",
+-        ("stale@example.com",),
+-    )
+-    db.commit()
+-
+-    # Next authed request should 401 with 'trial expired'
+-    r = client.get("/api/videos")
+-    assert r.status_code == 401
+-    body = r.get_json()
+-    assert body["error"] == "trial expired"
+-    assert body["join_url"] == "https://www.skool.com/aimate"
+-
+-    # And the row is flipped
+-    row = db.execute(
+-        "SELECT allowlisted, allowlist_source FROM users WHERE email = ?",
+-        ("stale@example.com",),
+-    ).fetchone()
+-    assert row["allowlisted"] == 0
+-    assert row["allowlist_source"] == "trial:expired"
+-
+ 
+ def test_trial_expiry_does_not_affect_paid_user(client, db):
+     # Paid user has trial_end NULL — expiry sweep must skip them.
+@@ -185,9 +152,14 @@ def test_trial_expiry_does_not_affect_paid_user(client, db):
+     assert row["allowlist_source"] == "paid"
+ 
+ 
+-def test_trial_still_valid_inside_window(client, db):
+-    # Fresh trial — trial_end is +7d. Next request should pass.
+-    client.post("/api/auth/skool/activate", json={"code": "admin", "email": "fresh@example.com"})
++def test_allowlisted_member_can_access_after_login(client, db):
++    # An allowlisted member logs in and subsequent authed requests succeed.
++    db.execute(
++        "INSERT INTO users (email, allowlisted, allowlist_source, allowlisted_at) "
++        "VALUES ('member@example.com', 1, 'paid', datetime('now'))"
++    )
++    db.commit()
++    client.post("/api/auth/skool/activate", json={"code": "admin", "email": "member@example.com"})
+     r = client.get("/api/videos")
+     assert r.status_code == 200
+ 
+@@ -229,7 +201,8 @@ def test_request_code_throttles_within_30s(client, db):
+     assert count == 1
+ 
+ 
+-def test_activate_with_valid_code_logs_in(client, db):
++def test_activate_with_valid_code_logs_in(client, db, seed_user):
++    seed_user("real@example.com", "real-handle")
+     client.post("/api/auth/skool/request-code", json={"email": "real@example.com"})
+     code = db.execute(
+         "SELECT code FROM login_codes WHERE email = ? AND status = 'pending'",
+@@ -261,7 +234,8 @@ def test_activate_rejects_wrong_code(client, db):
+     assert r.status_code == 400
+ 
+ 
+-def test_activate_rejects_consumed_code(client, db):
++def test_activate_rejects_consumed_code(client, db, seed_user):
++    seed_user("twice@example.com", "twice-handle")
+     client.post("/api/auth/skool/request-code", json={"email": "twice@example.com"})
+     code = db.execute(
+         "SELECT code FROM login_codes WHERE email = ? AND status = 'pending'",
+@@ -298,8 +272,9 @@ def test_activate_rejects_expired_code(client, db):
+     assert "expired" in r.get_json()["error"].lower()
+ 
+ 
+-def test_admin_override_bypasses_code_check(client, db):
+-    # No /request-code call at all; admin string just works
++def test_admin_override_bypasses_code_check(client, db, seed_user):
++    # No /request-code call at all; admin string just works for an allowlisted user
++    seed_user("owner@example.com", "owner-handle")
+     r = client.post(
+         "/api/auth/skool/activate",
+         json={"email": "owner@example.com", "code": "admin"},
+diff --git a/tests/test_generate_thumb.py b/tests/test_generate_thumb.py
+index 792e1e6..b740b9e 100644
+--- a/tests/test_generate_thumb.py
++++ b/tests/test_generate_thumb.py
+@@ -28,6 +28,9 @@ def fake_flux(app_module, monkeypatch):
+         calls.append({"prompt": prompt, "api_key": api_key})
+         return PNG, None
+     monkeypatch.setattr(app_module, "_replicate_flux_image", _gen)
++    # Thumb generation now runs on the server REPLICATE_API_TOKEN (BYO keys were
++    # dropped). Tests that delete/override this env do so in their own body.
++    monkeypatch.setenv("REPLICATE_API_TOKEN", "r8_test")
+     return calls
+ 
+ 
+@@ -103,8 +106,8 @@ def test_generate_thumb_faceless_fills_slots(client, seed_user, login_as, db, fa
+     assert body["count"] == 3
+     filled = [u for u in body["original_thumbs"] if u]
+     assert len(filled) == 3
+-    # used the user's own key
+-    assert all(c["api_key"] == "r8_userkey123" for c in fake_flux)
++    # runs on the server Replicate token (BYO keys were dropped)
++    assert all(c["api_key"] == "r8_test" for c in fake_flux)
+ 
+ 
+ def test_generate_thumb_uses_prompt_override(client, seed_user, login_as, db, fake_flux):
+diff --git a/tests/test_migration.py b/tests/test_migration.py
+new file mode 100644
+index 0000000..6f5a826
+--- /dev/null
++++ b/tests/test_migration.py
+@@ -0,0 +1,19 @@
++"""Tests for the fresh-DB migration path (_maybe_drop_videos_video_id_unique).
++
++A fresh DB built by init_db() + migrate_schema() must end up with a videos
++table that has no column-level UNIQUE on video_id, and still carries all
++late-added columns (scheduled_at, writing_doc).
++"""
++
++
++def test_fresh_db_migrates_without_crashing(app_module, db):
++    """A fresh DB (built by init_db+migrate at import) must end up with a
++    `videos` table that has NO column-level UNIQUE on video_id, and still
++    carries the late-added columns (scheduled_at, writing_doc)."""
++    sql = db.execute(
++        "SELECT sql FROM sqlite_master WHERE type='table' AND name='videos'"
++    ).fetchone()["sql"]
++    assert "video_id TEXT UNIQUE" not in sql
++    cols = {r["name"] for r in db.execute("PRAGMA table_info(videos)")}
++    assert "scheduled_at" in cols
++    assert "writing_doc" in cols
+diff --git a/tests/test_open_signup.py b/tests/test_open_signup.py
+index b2cbe3c..3861128 100644
+--- a/tests/test_open_signup.py
++++ b/tests/test_open_signup.py
+@@ -68,15 +68,6 @@ def test_open_signup_does_not_revoke_expired_trial(client, app_module, monkeypat
+     assert row["allowlisted"] == 1  # never got swept
+ 
+ 
+-def test_closed_mode_still_revokes_expired_trial(client, app_module, monkeypatch, db, seed_user, login_as):
+-    uid = seed_user("trialer2@example.com", "trialer2-handle")
+-    login_as("trialer2@example.com")
+-    _expire_trial(db, uid)
+-    monkeypatch.delenv("OPEN_SIGNUP", raising=False)
+-    r = client.get("/api/uploads")
+-    assert r.status_code == 401
+-    assert r.get_json().get("error") == "trial expired"
+-
+ 
+ # ── auth-status advertises the mode to the frontend ────────
+ 
+diff --git a/tests/test_skool_gate.py b/tests/test_skool_gate.py
+index 7102af4..c1520fa 100644
+--- a/tests/test_skool_gate.py
++++ b/tests/test_skool_gate.py
+@@ -133,7 +133,7 @@ def test_live_revocation_kills_session(client, seed_user, login_as, db):
+     r = client.get("/api/videos")
+     assert r.status_code == 401
+     body = r.get_json()
+-    assert body["error"] == "access revoked"
++    assert body["error"] == "not a member"
+ 
+ 
+ def test_oauth_configured_rejects_user_email_field(client, seed_user, monkeypatch):
+diff --git a/tests/test_skool_membership.py b/tests/test_skool_membership.py
+new file mode 100644
+index 0000000..3c6c419
+--- /dev/null
++++ b/tests/test_skool_membership.py
+@@ -0,0 +1,86 @@
++def test_paid_webhook_sets_tier_paid(app_module, db, client, monkeypatch):
++    monkeypatch.setenv("PAID_WEBHOOK_TOKEN", "pytest-paid-token")
++    r = client.post("/api/admin/paid-members",
++                    headers={"Authorization": "Bearer pytest-paid-token"},
++                    json={"email": "payer@x.com", "name": "Payer"})
++    assert r.status_code == 200
++    row = db.execute("SELECT tier, allowlist_source FROM users WHERE email='payer@x.com'").fetchone()
++    assert row["tier"] == "paid"
++    assert row["allowlist_source"] == "paid"
++
++
++def _sync(client, emails=None, **extra):
++    body = {"members": [{"email": e} for e in (emails or [])]}
++    body.update(extra)   # e.g. reconcile=True, revoke=[...]
++    return client.post("/api/admin/skool-members",
++                       headers={"Authorization": "Bearer pytest-paid-token"}, json=body)
++
++
++def _seed_skool(db, seed_user, email, handle):
++    uid = seed_user(email, handle)
++    db.execute("UPDATE users SET allowlist_source='skool' WHERE id=?", (uid,)); db.commit()
++    return uid
++
++
++def test_sync_reconcile_allowlists_roster_and_revokes_absent(app_module, db, client, monkeypatch, seed_user):
++    monkeypatch.setenv("PAID_WEBHOOK_TOKEN", "pytest-paid-token")
++    _seed_skool(db, seed_user, "keep@x.com", "keep")
++    _seed_skool(db, seed_user, "gone@x.com", "gone")
++    # FULL-ROSTER reconcile: gone@ absent -> revoked; new@ added; keep@ stays.
++    r = _sync(client, ["keep@x.com", "new@x.com"], reconcile=True)
++    assert r.status_code == 200
++    assert db.execute("SELECT allowlisted FROM users WHERE email='keep@x.com'").fetchone()["allowlisted"] == 1
++    assert db.execute("SELECT allowlisted FROM users WHERE email='new@x.com'").fetchone()["allowlisted"] == 1
++    assert db.execute("SELECT allowlisted FROM users WHERE email='gone@x.com'").fetchone()["allowlisted"] == 0
++
++
++def test_sync_additive_default_does_not_revoke_absent(app_module, db, client, monkeypatch, seed_user):
++    """A partial payload (the per-record Zapier flow) must NOT wipe other members."""
++    monkeypatch.setenv("PAID_WEBHOOK_TOKEN", "pytest-paid-token")
++    _seed_skool(db, seed_user, "existing@x.com", "exist")
++    r = _sync(client, ["new-joiner@x.com"])   # no reconcile flag
++    assert r.status_code == 200
++    # existing member is untouched (NOT revoked), new joiner is added.
++    assert db.execute("SELECT allowlisted FROM users WHERE email='existing@x.com'").fetchone()["allowlisted"] == 1
++    assert db.execute("SELECT allowlisted FROM users WHERE email='new-joiner@x.com'").fetchone()["allowlisted"] == 1
++
++
++def test_sync_explicit_revoke_only_hits_skool_paid(app_module, db, client, monkeypatch, seed_user):
++    monkeypatch.setenv("PAID_WEBHOOK_TOKEN", "pytest-paid-token")
++    _seed_skool(db, seed_user, "cancelled@x.com", "canc")
++    m = seed_user("founder@x.com", "found")
++    db.execute("UPDATE users SET allowlist_source='manual' WHERE id=?", (m,)); db.commit()
++    r = _sync(client, revoke=["cancelled@x.com", "founder@x.com"])
++    assert r.status_code == 200
++    assert db.execute("SELECT allowlisted FROM users WHERE email='cancelled@x.com'").fetchone()["allowlisted"] == 0
++    # the manual override is protected even when explicitly listed in revoke.
++    assert db.execute("SELECT allowlisted FROM users WHERE email='founder@x.com'").fetchone()["allowlisted"] == 1
++
++
++def test_sync_never_revokes_manual_or_seed(app_module, db, client, monkeypatch, seed_user):
++    monkeypatch.setenv("PAID_WEBHOOK_TOKEN", "pytest-paid-token")
++    m = seed_user("manual@x.com", "man")
++    db.execute("UPDATE users SET allowlist_source='manual' WHERE id=?", (m,)); db.commit()
++    # even a FULL reconcile that omits manual@ must not revoke it.
++    _sync(client, ["someone-else@x.com"], reconcile=True)
++    assert db.execute("SELECT allowlisted FROM users WHERE email='manual@x.com'").fetchone()["allowlisted"] == 1
++
++
++def test_sync_requires_token(app_module, client):
++    r = client.post("/api/admin/skool-members", json={"members": []})
++    assert r.status_code == 401
++
++
++def test_non_member_email_is_refused_no_trial(app_module, db, client, monkeypatch):
++    monkeypatch.setenv("ADMIN_LOGIN_PASSWORD", "admin")
++    r = client.post("/api/auth/skool/activate", json={"email": "stranger@x.com", "code": "admin"})
++    assert r.status_code in (401, 403)
++    row = db.execute("SELECT allowlisted FROM users WHERE email='stranger@x.com'").fetchone()
++    assert row is None or row["allowlisted"] == 0   # NO trial row granted
++
++
++def test_member_email_gets_in_at_free(app_module, db, client, seed_user, monkeypatch):
++    monkeypatch.setenv("ADMIN_LOGIN_PASSWORD", "admin")
++    seed_user("member@x.com", "mem")   # allowlisted=1 via conftest
++    r = client.post("/api/auth/skool/activate", json={"email": "member@x.com", "code": "admin"})
++    assert r.status_code == 200
+diff --git a/tests/test_usage_budget.py b/tests/test_usage_budget.py
+index 76ba51b..38cfa5b 100644
+--- a/tests/test_usage_budget.py
++++ b/tests/test_usage_budget.py
+@@ -37,3 +37,8 @@ def test_lazy_monthly_reset():
+     c = mkconn()
+     c.execute("UPDATE users SET usage_cents=90, usage_period='2000-01' WHERE id=1"); c.commit()
+     assert ub.usage_summary(c, 1)["used_cents"] == 0
++
++
++def test_paid_cap_is_100_dollars():
++    assert ub.TIER_CAP["paid"] == 10000   # $100.00 in cents
++    assert ub.TIER_CAP["free"] == 100      # $1.00 in cents
+diff --git a/usage_budget.py b/usage_budget.py
+index 139dbb3..ec24d5c 100644
+--- a/usage_budget.py
++++ b/usage_budget.py
+@@ -2,7 +2,7 @@
+ # Tiers differ ONLY by cap size. Cheap surfaces (Gemini text, Whisper) are absent = free.
+ from datetime import datetime, timezone
+ 
+-TIER_CAP = {"free": 100, "paid": 2000}  # cents/month. Tunable dials. free=$1.00, paid=$20.00
++TIER_CAP = {"free": 100, "paid": 10000}  # cents/month. free=$1.00, paid=$100.00
+ 
+ 
+ def current_period(now=None):

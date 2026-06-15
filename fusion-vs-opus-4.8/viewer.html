@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fusion vs Opus 4.8 &mdash; A/B Viewer</title>
+<!-- Each test's results are injected as window.AB_RUNS[slug] by ab_test.py.
+     Plain <script> includes work over file:// where fetch() would be CORS-blocked.
+     Missing files (tests not run yet) 404 silently and show as "not run". -->
+<script src="runs/gta-v2.js"></script>
+<script src="runs/internet-1999.js"></script>
+<script src="runs/pixel-synth.js"></script>
+<script src="runs/flight-sim.js"></script>
+<script src="runs/destruction-sandbox.js"></script>
+<script src="runs/productivity-hub.js"></script>
+<style>
+  :root {
+    --bg: #06070d; --panel: rgba(20, 23, 38, 0.62); --border: rgba(255,255,255,0.08);
+    --text: #e8eaf2; --muted: #8b90a8;
+    --fusion-1: #22d3ee; --fusion-2: #a855f7; --opus-1: #f5a524; --opus-2: #fb6f5d;
+    --good: #34d399; --warn: #fbbf24;
+    --radius: 18px; --shadow: 0 24px 60px -24px rgba(0,0,0,0.85);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.55; min-height: 100vh; overflow-x: hidden; position: relative;
+  }
+  body::before {
+    content: ""; position: fixed; inset: -30vmax; z-index: -2;
+    background:
+      radial-gradient(40vmax 40vmax at 16% 8%, rgba(34,211,238,0.16), transparent 60%),
+      radial-gradient(46vmax 46vmax at 88% 0%, rgba(168,85,247,0.16), transparent 60%),
+      radial-gradient(42vmax 42vmax at 80% 96%, rgba(251,111,93,0.14), transparent 62%),
+      radial-gradient(38vmax 38vmax at 8% 92%, rgba(245,165,36,0.10), transparent 60%);
+    filter: saturate(120%); animation: drift 26s ease-in-out infinite alternate;
+  }
+  body::after {
+    content: ""; position: fixed; inset: 0; z-index: -1;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size: 46px 46px; mask-image: radial-gradient(circle at 50% 30%, black, transparent 78%);
+  }
+  @keyframes drift { 0% { transform: translate3d(0,0,0) scale(1);} 100% { transform: translate3d(2%,-2%,0) scale(1.06);} }
+
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 36px 28px 80px; }
+
+  .kicker {
+    display: inline-flex; align-items: center; gap: 9px; font-size: 12px; letter-spacing: 0.22em;
+    text-transform: uppercase; color: var(--muted); font-weight: 600; padding: 7px 14px;
+    border: 1px solid var(--border); border-radius: 999px; background: rgba(255,255,255,0.03);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); }
+  .dot.pending, .dot.notrun { background: var(--warn); }
+  .dot.error, .dot.partial { background: var(--opus-2); }
+  .dot.notrun { background: #5b6079; }
+  h1 { font-size: clamp(28px,4.4vw,48px); line-height: 1.04; margin: 14px 0 6px; font-weight: 800; letter-spacing: -0.02em; }
+  h1 .vs { background: linear-gradient(90deg,var(--fusion-1),var(--fusion-2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  h1 .opus { background: linear-gradient(90deg,var(--opus-1),var(--opus-2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .sub { color: var(--muted); font-size: 15px; max-width: 760px; }
+
+  /* ---- Tabs ---- */
+  .tabs { display: flex; gap: 8px; margin: 24px 0 6px; overflow-x: auto; padding-bottom: 6px; }
+  .tabs::-webkit-scrollbar { height: 6px; }
+  .tabs::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 6px; }
+  .tab {
+    flex: none; display: inline-flex; align-items: center; gap: 9px; cursor: pointer;
+    border: 1px solid var(--border); background: rgba(255,255,255,0.03); color: var(--muted);
+    padding: 10px 16px; border-radius: 12px; font-weight: 600; font-size: 13.5px; white-space: nowrap;
+    transition: all 0.18s ease;
+  }
+  .tab .emoji { font-size: 16px; filter: grayscale(0.4); transition: filter 0.18s ease; }
+  .tab:hover { color: var(--text); border-color: rgba(255,255,255,0.18); }
+  .tab.active { color: #fff; background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.28); }
+  .tab.active .emoji { filter: none; }
+  .tab .tdot { width: 7px; height: 7px; border-radius: 50%; }
+  .tab .tdot.ok { background: var(--good); } .tab .tdot.error, .tab .tdot.partial { background: var(--opus-2); }
+  .tab .tdot.pending { background: var(--warn); } .tab .tdot.notrun { background: #5b6079; }
+
+  /* ---- Prompt card ---- */
+  .prompt-card { margin: 18px 0; padding: 18px 22px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); backdrop-filter: blur(14px); box-shadow: var(--shadow); }
+  .prompt-label { font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted);
+    font-weight: 700; margin-bottom: 8px; }
+  .prompt-text { color: #d2d6e6; font-size: 14.5px; white-space: pre-wrap; }
+
+  .banner { margin: 0 0 18px; padding: 14px 18px; border-radius: 14px; border: 1px solid rgba(251,191,36,0.3);
+    background: rgba(251,191,36,0.07); color: #f4d58a; font-size: 14px; }
+  .banner code { background: rgba(255,255,255,0.08); padding: 2px 7px; border-radius: 6px;
+    font-family: ui-monospace, Menlo, monospace; color: #ffe9b0; }
+
+  /* ---- Winner control ---- */
+  .control-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; margin: 4px 0 22px; }
+  .toggle { display: inline-flex; padding: 5px; gap: 4px; background: rgba(255,255,255,0.04); border: 1px solid var(--border); border-radius: 999px; }
+  .toggle button { border: 0; cursor: pointer; font: inherit; font-weight: 600; font-size: 13px; color: var(--muted);
+    background: transparent; padding: 9px 18px; border-radius: 999px; transition: all 0.18s ease; white-space: nowrap; }
+  .toggle button:hover { color: var(--text); }
+  .toggle button.active { color: #fff; }
+  .toggle button.active[data-win="A"] { background: linear-gradient(90deg,var(--fusion-1),var(--fusion-2)); }
+  .toggle button.active[data-win="B"] { background: linear-gradient(90deg,var(--opus-1),var(--opus-2)); }
+  .toggle button.active[data-win="tie"] { background: rgba(255,255,255,0.16); }
+  .control-hint { color: var(--muted); font-size: 13px; }
+
+  .compare { display: grid; grid-template-columns: repeat(2,1fr); gap: 14px; margin-bottom: 26px; }
+  .cmp { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; backdrop-filter: blur(10px); }
+  .cmp h4 { margin: 0 0 12px; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+  .bar-row { display: flex; align-items: center; gap: 10px; margin: 9px 0; font-size: 13px; }
+  .bar-name { width: 70px; color: var(--muted); flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar-track { flex: 1; height: 10px; border-radius: 999px; background: rgba(255,255,255,0.06); overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 999px; transition: width 0.7s cubic-bezier(.2,.8,.2,1); }
+  .bar-fill.A { background: linear-gradient(90deg,var(--fusion-1),var(--fusion-2)); }
+  .bar-fill.B { background: linear-gradient(90deg,var(--opus-1),var(--opus-2)); }
+  .bar-val { width: 96px; text-align: right; flex: none; font-variant-numeric: tabular-nums; color: var(--text); font-weight: 700; font-size: 15.5px; }
+  .bar-val .win { color: var(--good); font-size: 11px; margin-left: 5px; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .panel { position: relative; border-radius: var(--radius); overflow: hidden; background: var(--panel);
+    border: 1px solid var(--border); backdrop-filter: blur(14px); box-shadow: var(--shadow);
+    transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease, opacity .25s ease; }
+  .panel .accent { height: 4px; width: 100%; }
+  .panel[data-model="A"] .accent { background: linear-gradient(90deg,var(--fusion-1),var(--fusion-2)); }
+  .panel[data-model="B"] .accent { background: linear-gradient(90deg,var(--opus-1),var(--opus-2)); }
+  .panel.winner { transform: translateY(-4px); }
+  .panel.winner[data-model="A"] { border-color: rgba(34,211,238,0.55); box-shadow: 0 0 0 1px rgba(34,211,238,0.35), 0 30px 70px -30px rgba(34,211,238,0.5); }
+  .panel.winner[data-model="B"] { border-color: rgba(245,165,36,0.55); box-shadow: 0 0 0 1px rgba(245,165,36,0.35), 0 30px 70px -30px rgba(251,111,93,0.5); }
+  .panel.dimmed { opacity: 0.6; }
+  .crown { position: absolute; top: 14px; right: 16px; z-index: 3; font-size: 12px; font-weight: 700; letter-spacing: 0.05em;
+    padding: 6px 12px; border-radius: 999px; color: #07101a; display: none; align-items: center; gap: 6px; }
+  .panel[data-model="A"] .crown { background: linear-gradient(90deg,var(--fusion-1),var(--fusion-2)); }
+  .panel[data-model="B"] .crown { background: linear-gradient(90deg,var(--opus-1),var(--opus-2)); }
+  .panel.winner .crown { display: inline-flex; }
+
+  .phead { padding: 20px 22px 6px; }
+  .badge { display: inline-flex; align-items: center; gap: 9px; font-weight: 700; font-size: 18px; letter-spacing: -0.01em; }
+  .badge .swatch { width: 11px; height: 11px; border-radius: 50%; }
+  .panel[data-model="A"] .swatch { background: linear-gradient(135deg,var(--fusion-1),var(--fusion-2)); }
+  .panel[data-model="B"] .swatch { background: linear-gradient(135deg,var(--opus-1),var(--opus-2)); }
+  .model-id { color: var(--muted); font-size: 12.5px; margin-top: 4px; font-family: ui-monospace, Menlo, monospace; }
+
+  .stats { display: grid; grid-template-columns: repeat(2,1fr); gap: 10px; padding: 16px 22px 4px; }
+  .stat { background: rgba(255,255,255,0.035); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; position: relative; }
+  .stat .k { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+  .stat .v { font-size: 22px; font-weight: 800; margin-top: 5px; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .stat .v small { font-size: 12px; font-weight: 600; color: var(--muted); }
+  .stat .statnote { font-size: 9.5px; color: var(--muted); margin-top: 5px; line-height: 1.3; letter-spacing: 0.02em; }
+  .pill { position: absolute; top: 10px; right: 10px; font-size: 9.5px; font-weight: 800; letter-spacing: 0.06em;
+    padding: 3px 7px; border-radius: 999px; background: rgba(52,211,153,0.16); color: var(--good);
+    border: 1px solid rgba(52,211,153,0.3); display: none; }
+  .stat.best .pill { display: inline-block; }
+
+  .resp-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px 8px; gap: 10px; }
+  .resp-head .t { font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+  .files { display: flex; flex-wrap: wrap; gap: 6px; }
+  .file-chip { font-size: 11px; font-family: ui-monospace, Menlo, monospace; padding: 4px 9px; border-radius: 7px;
+    color: #cfd3e6; background: rgba(255,255,255,0.05); border: 1px solid var(--border); text-decoration: none; transition: background .15s ease; }
+  .file-chip:hover { background: rgba(255,255,255,0.1); }
+
+  .response { padding: 4px 22px 24px; max-height: 560px; overflow-y: auto; font-size: 14.5px; color: #d6dae9; }
+  .response::-webkit-scrollbar { width: 9px; }
+  .response::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 9px; }
+  .response h1, .response h2, .response h3 { color: #fff; line-height: 1.25; margin: 18px 0 8px; }
+  .response h1 { font-size: 20px; } .response h2 { font-size: 17px; } .response h3 { font-size: 15px; }
+  .response p { margin: 10px 0; } .response ul, .response ol { margin: 10px 0; padding-left: 22px; } .response li { margin: 4px 0; }
+  .response a { color: var(--fusion-1); }
+  .response code.inline { background: rgba(255,255,255,0.08); padding: 1.5px 6px; border-radius: 5px; font-family: ui-monospace, Menlo, monospace; font-size: 0.88em; color: #ffd9a8; }
+  .response pre { background: #0a0c16; border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; overflow-x: auto; margin: 14px 0; position: relative; }
+  .response pre .lang { position: absolute; top: 8px; right: 12px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+  .response pre code { font-family: ui-monospace, Menlo, monospace; font-size: 12.8px; color: #d7e7ff; white-space: pre; line-height: 1.55; }
+
+  .empty { padding: 40px 22px; text-align: center; color: var(--muted); font-size: 14px; }
+  .empty code { background: rgba(255,255,255,0.06); padding: 2px 7px; border-radius: 6px; font-family: ui-monospace, Menlo, monospace; }
+  .shimmer { height: 14px; border-radius: 7px; margin: 12px 22px; background: linear-gradient(90deg, rgba(255,255,255,0.04), rgba(255,255,255,0.1), rgba(255,255,255,0.04)); background-size: 200% 100%; animation: shim 1.5s infinite; }
+  .shimmer.w70 { width: 70%; } .shimmer.w90 { width: 90%; } .shimmer.w50 { width: 50%; }
+  @keyframes shim { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+  .err-box { margin: 16px 22px; padding: 14px 16px; border-radius: 12px; background: rgba(251,111,93,0.08); border: 1px solid rgba(251,111,93,0.3); color: #ffb8ac; font-size: 13px; font-family: ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+
+  footer { margin-top: 40px; color: var(--muted); font-size: 12.5px; text-align: center; }
+  footer code { background: rgba(255,255,255,0.06); padding: 2px 7px; border-radius: 6px; font-family: ui-monospace, Menlo, monospace; }
+
+  @media (max-width: 880px) { .grid { grid-template-columns: 1fr; } .compare { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <span class="kicker"><span class="dot" id="statusDot"></span><span id="statusText">Loading</span></span>
+      <h1><span class="vs">Fusion</span> &nbsp;vs&nbsp; <span class="opus">Opus&nbsp;4.8</span></h1>
+      <p class="sub">Six one-shot builds, same prompt, two models. A multi-model composite (panel + web search + synthesis) against a single frontier model — judged on cost, latency, and what they actually ship.</p>
+    </header>
+
+    <div id="promptArea"></div>
+    <nav class="tabs" id="tabs"></nav>
+    <div id="stage"></div>
+
+    <footer>
+      Generated by <code>ab_test.py</code> &middot; prompts from <code>testlab/fusion-vs-opus-4.8</code> &middot;
+      <span id="genTime"></span>
+    </footer>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  // The six tests in this episode (matches testlab #22–27 and run_all.sh slugs).
+  // GTA (the hardest prompt) moved off the lead — both sides struggle to one-shot it,
+  // so it's a weak opener. Reorder freely; the first entry is what loads by default.
+  var TESTS = [
+    { slug: "internet-1999",       label: "1999 Internet",       emoji: "🌐" },
+    { slug: "pixel-synth",         label: "Pixel Synth",         emoji: "🎹" },
+    { slug: "destruction-sandbox", label: "Destruction Sandbox", emoji: "🧪" },
+    { slug: "productivity-hub",    label: "Productivity Hub",    emoji: "✅" },
+    { slug: "flight-sim",          label: "Flight Sim",          emoji: "✈️" },
+    { slug: "gta-v2",              label: "GTA v2",              emoji: "🏙️" }
+  ];
+  var RUNS = window.AB_RUNS || {};
+  var active = TESTS[0].slug;
+
+  function labelFor(slug) { var t = TESTS.find(function (x) { return x.slug === slug; }); return t ? t.label : slug; }
+
+  function dataFor(slug) {
+    if (RUNS[slug]) return RUNS[slug];
+    return {
+      status: "notrun", slug: slug, label: labelFor(slug), prompt: null,
+      models: [
+        { label: "OpenRouter Fusion", id: "openrouter/fusion", status: "pending" },
+        { label: "Claude Opus 4.8", id: "anthropic/claude-opus-4.8", status: "pending" }
+      ]
+    };
+  }
+
+  function testStatus(slug) {
+    var d = RUNS[slug];
+    if (!d) return "notrun";
+    if (d.status === "pending") return "pending";
+    if (d.models && d.models.some(function (m) { return m.status === "error"; })) return "error";
+    if (d.models && d.models.every(function (m) { return m.status === "ok"; })) return "ok";
+    return "partial";
+  }
+
+  // ---------- markdown ----------
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  function inlineMd(s) {
+    s = esc(s);
+    s = s.replace(/`([^`]+)`/g, '<code class="inline">$1</code>');
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+    s = s.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    return s;
+  }
+  function renderMarkdown(text) {
+    if (!text) return "";
+    var out = [], lines = String(text).split("\n"), i = 0, inList = false, listTag = "";
+    function closeList() { if (inList) { out.push("</" + listTag + ">"); inList = false; } }
+    while (i < lines.length) {
+      var line = lines[i];
+      var fence = line.match(/^```(.*)$/);
+      if (fence) {
+        closeList();
+        var lang = fence[1].trim().split(/\s+/)[0] || "";
+        var buf = []; i++;
+        while (i < lines.length && !/^```/.test(lines[i])) { buf.push(lines[i]); i++; }
+        i++;
+        var label = lang ? '<span class="lang">' + esc(lang) + "</span>" : "";
+        out.push("<pre>" + label + "<code>" + esc(buf.join("\n")) + "</code></pre>");
+        continue;
+      }
+      var h = line.match(/^(#{1,3})\s+(.*)$/);
+      if (h) { closeList(); out.push("<h" + h[1].length + ">" + inlineMd(h[2]) + "</h" + h[1].length + ">"); i++; continue; }
+      var ul = line.match(/^\s*[-*+]\s+(.*)$/), ol = line.match(/^\s*\d+\.\s+(.*)$/);
+      if (ul || ol) {
+        var want = ul ? "ul" : "ol";
+        if (!inList || listTag !== want) { closeList(); listTag = want; out.push("<" + want + ">"); inList = true; }
+        out.push("<li>" + inlineMd(ul ? ul[1] : ol[1]) + "</li>"); i++; continue;
+      }
+      if (line.trim() === "") { closeList(); i++; continue; }
+      closeList(); out.push("<p>" + inlineMd(line) + "</p>"); i++;
+    }
+    closeList(); return out.join("\n");
+  }
+
+  // ---------- format ----------
+  function money(v) { if (v == null) return "&mdash;"; if (v === 0) return "$0"; return v < 0.01 ? "$" + v.toFixed(5) : "$" + v.toFixed(4); }
+  function secs(v) {
+    if (v == null) return "&mdash;";
+    var t = Math.round(v), m = Math.floor(t / 60), s = t % 60;
+    return m > 0 ? (m + "<small>m</small> " + s + "<small>s</small>") : (s + "<small>s</small>");
+  }
+  function num(v) { return v == null ? "&mdash;" : Number(v).toLocaleString(); }
+
+  function metricVal(m, key) {
+    if (key === "cost") return m.cost_usd;
+    if (key === "latency") return m.latency_s;
+    if (key === "lines") return (m.code_blocks && m.code_blocks[0] && m.code_blocks[0].lines) || null;
+    return (m.usage && m.usage.total_tokens) || null; // tokens
+  }
+  function bestIndex(models, key, lowerIsBetter) {
+    var best = -1, bestVal = null;
+    models.forEach(function (m, idx) {
+      if (m.status !== "ok") return;
+      var v = metricVal(m, key);
+      if (v == null) return;
+      if (bestVal == null || (lowerIsBetter ? v < bestVal : v > bestVal)) { bestVal = v; best = idx; }
+    });
+    return best;
+  }
+
+  // ---------- tabs ----------
+  function renderTabs() {
+    document.getElementById("tabs").innerHTML = TESTS.map(function (t) {
+      var st = testStatus(t.slug);
+      return '<div class="tab' + (t.slug === active ? " active" : "") + '" data-slug="' + t.slug + '">' +
+        '<span class="emoji">' + t.emoji + '</span>' + esc(t.label) +
+        '<span class="tdot ' + st + '"></span></div>';
+    }).join("");
+    document.querySelectorAll(".tab").forEach(function (el) {
+      el.addEventListener("click", function () { active = el.getAttribute("data-slug"); renderTabs(); renderActive(); });
+    });
+  }
+
+  // ---------- header status ----------
+  function setHeader() {
+    var done = TESTS.filter(function (t) { return testStatus(t.slug) === "ok"; }).length;
+    var st = testStatus(active);
+    document.getElementById("statusDot").className = "dot " + st;
+    document.getElementById("statusText").textContent = done + " / " + TESTS.length + " tests complete";
+    var times = TESTS.map(function (t) { return RUNS[t.slug] && RUNS[t.slug].generated_at; }).filter(Boolean).sort();
+    document.getElementById("genTime").textContent = times.length ? "last run " + new Date(times[times.length - 1]).toLocaleString() : "not run yet";
+  }
+
+  // ---------- panel ----------
+  function panelHTML(model, idx) {
+    var tag = idx === 0 ? "A" : "B", u = model.usage || {}, st = model.status;
+    var statCost = "<div class='stat' data-stat='cost'><span class='pill'>cheapest</span><div class='k'>Cost</div><div class='v'>" + money(model.cost_usd) + "</div></div>";
+    var statLat = "<div class='stat' data-stat='latency'><span class='pill'>fastest</span><div class='k'>Speed</div><div class='v'>" + secs(model.latency_s) + "</div></div>";
+    var loc = (model.code_blocks && model.code_blocks[0] && model.code_blocks[0].lines) || null;
+    var statLines = "<div class='stat'><div class='k'>Lines of code</div><div class='v'>" + num(loc) + "</div></div>";
+    var tokNote = model.id === "openrouter/fusion" ? "<div class='statnote'>synthesizer output only</div>" : "";
+    var statTok = "<div class='stat'><div class='k'>Tokens used</div><div class='v'>" + num(u.total_tokens) + "</div>" + tokNote + "</div>";
+    var body;
+    if (st === "pending") {
+      body = "<div class='shimmer w90'></div><div class='shimmer w70'></div><div class='shimmer w50'></div>" +
+             "<div class='empty'>Not run yet &mdash; <code>./run_all.sh " + esc(active) + "</code></div>";
+    } else if (st === "error") {
+      body = "<div class='err-box'>" + esc(model.error || "Unknown error") + "</div>";
+    } else if (!model.response) {
+      body = "<div class='empty'>No text returned.</div>";
+    } else {
+      body = "<div class='response'>" + renderMarkdown(model.response) + "</div>";
+    }
+    var files = (model.code_blocks || []).map(function (cb) {
+      var href = cb.href || ("extracted_code/" + cb.filename);
+      return "<a class='file-chip' href='" + href + "' target='_blank' rel='noopener'>&#128196; " + esc(cb.filename) + "</a>";
+    }).join("");
+    var served = model.model_returned ? " &middot; served: " + esc(model.model_returned) : "";
+    var fin = (model.finish_reason && model.finish_reason !== "stop") ? " &middot; <span style='color:var(--warn)'>finish: " + esc(model.finish_reason) + "</span>" : "";
+    return "<article class='panel' data-model='" + tag + "'>" +
+      "<div class='accent'></div><div class='crown'>&#9733; Winner</div>" +
+      "<div class='phead'><div class='badge'><span class='swatch'></span>" + esc(model.label) + "</div>" +
+      "<div class='model-id'>" + esc(model.id) + served + fin + "</div></div>" +
+      "<div class='stats'>" + statCost + statLat + statLines + statTok + "</div>" +
+      "<div class='resp-head'><span class='t'>Response</span><div class='files'>" + files + "</div></div>" +
+      body + "</article>";
+  }
+
+  function compareHTML(models) {
+    if (models.length < 2 || models.some(function (m) { return m.status !== "ok"; })) return "";
+    var names = ["Fusion", "Opus"];
+    function maxOf(key) { return Math.max.apply(null, models.map(function (m) { return metricVal(m, key) || 0; })); }
+    function block(title, key, fmt, best) {
+      var max = maxOf(key);
+      var rows = models.map(function (m, i) {
+        var v = metricVal(m, key);
+        var pct = (max > 0 && v != null) ? Math.max(4, (v / max) * 100) : 0;
+        return '<div class="bar-row"><span class="bar-name">' + names[i] + '</span>' +
+          '<span class="bar-track"><span class="bar-fill ' + (i === 0 ? "A" : "B") + '" style="width:' + pct + '%"></span></span>' +
+          '<span class="bar-val">' + fmt(v) + (i === best ? '<span class="win">best</span>' : '') + '</span></div>';
+      }).join("");
+      return '<div class="cmp"><h4>' + title + '</h4>' + rows + '</div>';
+    }
+    var fmtNum = function (v) { return v == null ? "&mdash;" : Number(v).toLocaleString(); };
+    return '<section class="compare">' +
+      block("Cost (USD)", "cost", function (v) { return v == null ? "&mdash;" : (v < 0.01 ? "$" + v.toFixed(5) : "$" + v.toFixed(4)); }, bestIndex(models, "cost", true)) +
+      block("Speed", "latency", function (v) { if (v == null) return "&mdash;"; var t = Math.round(v), m = Math.floor(t / 60), s = t % 60; return m > 0 ? (m + "m " + s + "s") : (s + "s"); }, bestIndex(models, "latency", true)) +
+      block("Lines of code", "lines", fmtNum, -1) +
+      block("Tokens used", "tokens", fmtNum, -1) +
+      '</section>';
+  }
+
+  // ---------- winner toggle ----------
+  function applyWinner(win) {
+    document.querySelectorAll("#stage .panel").forEach(function (p) {
+      var tag = p.getAttribute("data-model");
+      p.classList.remove("winner", "dimmed");
+      if (win === "tie" || !win) return;
+      p.classList.add(tag === win ? "winner" : "dimmed");
+    });
+    document.querySelectorAll("#stage .toggle button").forEach(function (b) {
+      b.classList.toggle("active", b.getAttribute("data-win") === win);
+    });
+    var hint = document.getElementById("winHint");
+    if (hint) hint.textContent = win === "A" ? "Fusion crowned." : win === "B" ? "Opus 4.8 crowned." : win === "tie" ? "Called a tie." : "Pick a winner — or let the metrics decide.";
+  }
+  function autoWinner(models) {
+    if (models.length < 2 || models.some(function (m) { return m.status !== "ok"; })) return null;
+    var score = [0, 0];
+    var bc = bestIndex(models, "cost", true); if (bc >= 0) score[bc]++;
+    var bl = bestIndex(models, "latency", true); if (bl >= 0) score[bl]++;
+    if (score[0] === score[1]) return "tie";
+    return score[0] > score[1] ? "A" : "B";
+  }
+
+  // ---------- render active test ----------
+  function renderActive() {
+    var d = dataFor(active);
+    var ran = !!RUNS[active];
+    var promptHtml = "";
+
+    if (!ran) {
+      promptHtml += "<div class='banner'>This test hasn't been run yet. Run it with " +
+              "<code>./run_all.sh " + esc(active) + "</code> (or <code>./run_all.sh</code> for all six), then refresh.</div>";
+    } else if (d.status === "pending") {
+      promptHtml += "<div class='banner'>Waiting for the API key &mdash; results will fill in once <code>ab_test.py</code> runs with a key.</div>";
+    }
+
+    if (d.prompt) {
+      promptHtml += "<div class='prompt-card'><div class='prompt-label'>&#9655; Prompt &middot; " + esc(d.label || labelFor(active)) + "</div>" +
+              "<div class='prompt-text'>" + esc(d.prompt) + "</div></div>";
+    } else {
+      promptHtml += "<div class='prompt-card'><div class='prompt-label'>&#9655; " + esc(labelFor(active)) + "</div>" +
+              "<div class='prompt-text' style='color:var(--muted)'>Prompt appears here once the test has been run. The canonical prompt lives in <code>testlab/fusion-vs-opus-4.8</code>.</div></div>";
+    }
+    document.getElementById("promptArea").innerHTML = promptHtml;
+
+    var html = "";
+    if (ran && d.models.every(function (m) { return m.status === "ok"; })) {
+      html += "<div class='control-row'><div class='toggle' role='group'>" +
+              "<button data-win='A'>Fusion wins</button><button data-win='tie'>Tie</button><button data-win='B'>Opus wins</button>" +
+              "</div><span class='control-hint' id='winHint'>Pick a winner — or let the metrics decide.</span></div>";
+      html += compareHTML(d.models);
+    }
+
+    html += "<section class='grid'>" + d.models.map(panelHTML).join("") + "</section>";
+    document.getElementById("stage").innerHTML = html;
+
+    // best-stat pills
+    if (ran && d.models.every(function (m) { return m.status === "ok"; })) {
+      var panels = document.querySelectorAll("#stage .panel");
+      var bc = bestIndex(d.models, "cost", true), bl = bestIndex(d.models, "latency", true);
+      if (bc >= 0) { var c = panels[bc].querySelector("[data-stat='cost']"); if (c) c.classList.add("best"); }
+      if (bl >= 0) { var l = panels[bl].querySelector("[data-stat='latency']"); if (l) l.classList.add("best"); }
+
+      var key = "ab_winner::" + active + "::" + (d.generated_at || "");
+      document.querySelectorAll("#stage .toggle button").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var w = btn.getAttribute("data-win"); applyWinner(w);
+          try { localStorage.setItem(key, w); } catch (e) {}
+        });
+      });
+      var saved = null; try { saved = localStorage.getItem(key); } catch (e) {}
+      applyWinner(saved || autoWinner(d.models));
+    }
+    setHeader();
+  }
+
+  // ---------- boot ----------
+  renderTabs();
+  renderActive();
+})();
+</script>
+</body>
+</html>

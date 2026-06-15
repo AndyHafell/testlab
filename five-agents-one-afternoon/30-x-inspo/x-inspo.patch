@@ -1,0 +1,1168 @@
+diff --git a/.env.example b/.env.example
+index d1e0e8a..cc1516b 100644
+--- a/.env.example
++++ b/.env.example
+@@ -27,6 +27,8 @@ OPEN_SIGNUP=
+ YOUTUBE_API_KEY=
+ BLOTATO_API_KEY=
+ BLOTATO_X_ACCOUNT_ID=
++# twitterapi.io key — powers X Inspiration (search X + pull tracked handles into Ideas)
++TWITTERAPI_IO_KEY=
+ AIRTABLE_TOKEN=
+ NAS_UPLOAD_URL=https://media.agentflow.net/upload
+ 
+diff --git a/app.py b/app.py
+index c4f0b87..aa9ef5c 100644
+--- a/app.py
++++ b/app.py
+@@ -60,6 +60,9 @@ UPLOAD_DIR = Path(__file__).resolve().parent / "static" / "uploads"
+ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+ BLOTATO_API_KEY = os.environ.get("BLOTATO_API_KEY", "")
+ BLOTATO_X_ACCOUNT_ID = int(os.environ.get("BLOTATO_X_ACCOUNT_ID", "0"))
++# twitterapi.io — third-party X (Twitter) read API powering X Inspiration.
++TWITTERAPI_IO_KEY = os.environ.get("TWITTERAPI_IO_KEY", "")
++TWITTERAPI_BASE = "https://api.twitterapi.io"
+ YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
+ # THUMB_QUEUE_USERS format: email1:secret1,email2:secret2 — maps a Bearer secret to one user identity
+ THUMB_QUEUE_USERS = {
+@@ -235,6 +238,20 @@ def init_db():
+             conn.execute(f"ALTER TABLE channels ADD COLUMN {col} {coltype} DEFAULT {default}")
+         except sqlite3.OperationalError:
+             pass
++    # X (Twitter) creators tracked for the X Inspiration feature. Mirrors the
++    # YouTube `channels` table: add a handle, pull their recent posts into Ideas.
++    conn.execute("""
++        CREATE TABLE IF NOT EXISTS x_creators (
++            id INTEGER PRIMARY KEY AUTOINCREMENT,
++            handle TEXT NOT NULL,
++            name TEXT DEFAULT '',
++            avatar TEXT DEFAULT '',
++            followers INTEGER DEFAULT 0,
++            last_pulled TEXT DEFAULT '',
++            added_at TEXT DEFAULT CURRENT_TIMESTAMP,
++            user_id INTEGER REFERENCES users(id)
++        )
++    """)
+     # Keywords table
+     conn.execute("""
+         CREATE TABLE IF NOT EXISTS keywords (
+@@ -544,6 +561,7 @@ def _maybe_drop_videos_video_id_unique(conn):
+         "    outlier_score REAL DEFAULT 0,\n"
+         "    channel_avg_views INTEGER DEFAULT 0,\n"
+         "    added_at TEXT DEFAULT CURRENT_TIMESTAMP,\n"
++        "    scheduled_at TEXT,\n"
+         "    transformed INTEGER DEFAULT 0,\n"
+         "    tucked INTEGER DEFAULT 0,\n"
+         "    editor_state TEXT,\n"
+@@ -3598,6 +3616,308 @@ def fetch_tweet_metadata(tweet_id: str) -> dict | None:
+     }
+ 
+ 
++def x_outlier_score(like_count, followers) -> float:
++    """Engagement-outlier for an X post — the parallel to YouTube's
++    view_count / channel_avg_views. Scaled so ~6% of followers liking → 3.0x
++    ("hot") and ~3% → 1.5x ("warm"), matching the existing badge thresholds.
++    Unknown followers or zero likes → 0.0 (no badge)."""
++    try:
++        like_count = int(like_count or 0)
++        followers = int(followers or 0)
++    except (TypeError, ValueError):
++        return 0.0
++    if like_count <= 0 or followers <= 0:
++        return 0.0
++    return round(like_count / followers * 50, 1)
++
++
++def _parse_x_date(s: str) -> str:
++    """twitterapi.io createdAt ('Sat Jun 13 00:50:03 +0000 2026') → ISO-8601 Z."""
++    if not s:
++        return ""
++    try:
++        dt = datetime.strptime(s, "%a %b %d %H:%M:%S %z %Y")
++        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
++    except (ValueError, TypeError):
++        return ""
++
++
++def tweet_to_video_meta(t: dict) -> dict:
++    """Map a twitterapi.io tweet object onto the same dict shape
++    fetch_tweet_metadata() returns, so the existing X-as-video ingest path can
++    consume it unchanged. thumbnail_url is intentionally left blank here — it is
++    filled with the generated credit-card tile at ingest time."""
++    t = t or {}
++    author = t.get("author") or {}
++    tweet_id = str(t.get("id") or "")
++
++    title = (t.get("text") or "").strip()
++    if len(title) > 200:
++        title = title[:197] + "..."
++
++    handle = author.get("userName") or ""
++    channel_title = f"@{handle}" if handle else (author.get("name") or "X")
++    followers = int(author.get("followers") or 0)
++    like_count = int(t.get("likeCount") or 0)
++    view_count = int(t.get("viewCount") or 0)
++    canonical_url = t.get("url") or (
++        f"https://x.com/{handle}/status/{tweet_id}" if handle
++        else f"https://x.com/i/status/{tweet_id}"
++    )
++    published_at = _parse_x_date(t.get("createdAt") or "")
++
++    media_all = ((t.get("extendedEntities") or {}).get("media")) or []
++    media = [
++        {
++            "url": m.get("media_url_https") or m.get("media_url") or "",
++            "thumbnail_url": m.get("media_url_https") or m.get("media_url") or "",
++            "type": m.get("type") or "",
++        }
++        for m in media_all
++    ]
++
++    return {
++        "video_id": f"x_{tweet_id}",
++        "title": title or "(tweet)",
++        "channel_title": channel_title,
++        "channel_thumb": author.get("profilePicture") or "",
++        "thumbnail_url": "",
++        "view_count": view_count,
++        "duration": "",
++        "published_at": published_at,
++        "outlier_score": x_outlier_score(like_count, followers),
++        "channel_avg_views": followers,
++        "_source": {
++            "platform": "x",
++            "url": canonical_url,
++            "text": (t.get("text") or "").strip(),
++            "author_name": author.get("name") or "",
++            "author_handle": handle,
++            "author_avatar": author.get("profilePicture") or "",
++            "created_at": published_at,
++            "views": view_count,
++            "likes": like_count,
++            "retweets": int(t.get("retweetCount") or 0),
++            "replies": int(t.get("replyCount") or 0),
++            "quotes": int(t.get("quoteCount") or 0),
++            "followers": followers,
++            "media": media,
++        },
++    }
++
++
++def _resolve_font(size: int, bold: bool = False):
++    """Load a TrueType font, trying macOS (local :5051) then Linux (VPS/DejaVu)
++    paths, falling back to PIL's bitmap default so rendering never hard-fails."""
++    from PIL import ImageFont
++    if bold:
++        candidates = [
++            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
++            "/Library/Fonts/Arial Bold.ttf",
++            "/System/Library/Fonts/Helvetica.ttc",
++            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
++            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
++            "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
++        ]
++    else:
++        candidates = [
++            "/System/Library/Fonts/Supplemental/Arial.ttf",
++            "/Library/Fonts/Arial.ttf",
++            "/System/Library/Fonts/Helvetica.ttc",
++            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
++            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
++            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
++        ]
++    for fp in candidates:
++        try:
++            return ImageFont.truetype(fp, size)
++        except (OSError, IOError):
++            continue
++    return ImageFont.load_default()
++
++
++def _humanize_count(n) -> str:
++    """21000 → '21K', 854742 → '855K', 1_400_000 → '1.4M'."""
++    try:
++        n = int(n or 0)
++    except (TypeError, ValueError):
++        return "0"
++    if n >= 1_000_000:
++        return f"{n / 1_000_000:.1f}M".replace(".0M", "M")
++    if n >= 1_000:
++        return f"{n / 1_000:.1f}K".replace(".0K", "K")
++    return str(n)
++
++
++def _draw_centered(draw, text, center, font, fill):
++    bbox = draw.textbbox((0, 0), text, font=font)
++    w = bbox[2] - bbox[0]
++    h = bbox[3] - bbox[1]
++    cx, cy = center
++    draw.text((cx - w / 2 - bbox[0], cy - h / 2 - bbox[1]), text, font=font, fill=fill)
++
++
++def _wrap_text(draw, text, font, max_width, max_lines=4):
++    """Greedy word-wrap to a pixel width, capped at max_lines with an ellipsis."""
++    words = (text or "").replace("\n", " ").split()
++    lines, cur, hit_limit = [], "", False
++    for w in words:
++        trial = (cur + " " + w).strip()
++        if not cur or draw.textlength(trial, font=font) <= max_width:
++            cur = trial
++        else:
++            lines.append(cur)
++            cur = w
++            if len(lines) == max_lines:
++                hit_limit = True
++                break
++    if not hit_limit and cur:
++        lines.append(cur)
++    lines = lines[:max_lines]
++    if hit_limit and lines:
++        last = lines[-1]
++        while last and draw.textlength(last + "…", font=font) > max_width:
++            last = last[:-1]
++        lines[-1] = (last + "…") if last else "…"
++    return lines
++
++
++def _fetch_avatar_image(url: str):
++    """Best-effort avatar fetch for the card tile. Network — called at ingest
++    time, never inside the pure renderer. Returns a PIL.Image or None."""
++    if not url:
++        return None
++    try:
++        from io import BytesIO
++        from PIL import Image
++        req = Request(url, headers={"User-Agent": "Mozilla/5.0 creatorgrowth"})
++        with urlopen(req, timeout=8) as r:
++            data = r.read()
++        return Image.open(BytesIO(data)).convert("RGBA")
++    except Exception:
++        return None
++
++
++def generate_x_card_image(meta: dict, out_path, avatar_img=None) -> str:
++    """Render the premium credit-card tile for an X post → 16:9 PNG at out_path.
++
++    Pure / no network: pass a pre-fetched PIL avatar via `avatar_img`, otherwise
++    a monogram fallback is drawn. The saved image becomes the post's
++    thumbnail_url so it renders like a YouTube card in the Ideas grid."""
++    from PIL import Image, ImageDraw
++    meta = meta or {}
++    src = meta.get("_source") or {}
++    W, H = 1200, 675
++
++    # Gradient background: violet → blue (left to right).
++    top, bot = (124, 58, 237), (37, 99, 235)
++    img = Image.new("RGB", (W, H))
++    gd = ImageDraw.Draw(img)
++    for x in range(W):
++        t = x / (W - 1)
++        gd.line(
++            [(x, 0), (x, H)],
++            fill=(
++                int(top[0] + (bot[0] - top[0]) * t),
++                int(top[1] + (bot[1] - top[1]) * t),
++                int(top[2] + (bot[2] - top[2]) * t),
++            ),
++        )
++    img = img.convert("RGBA")
++
++    # Inner translucent card panel (the "credit card").
++    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
++    m = 54
++    ImageDraw.Draw(overlay).rounded_rectangle(
++        [m, m, W - m, H - m], radius=40, fill=(255, 255, 255, 28)
++    )
++    img = Image.alpha_composite(img, overlay)
++    draw = ImageDraw.Draw(img)
++
++    pad = m + 40
++    handle = (src.get("author_handle") or "").strip()
++    name = (src.get("author_name") or "").strip()
++
++    # Header: avatar (or monogram) + @handle + name.
++    av_size, ax, ay = 96, pad, pad
++    drew_avatar = False
++    if avatar_img is not None:
++        try:
++            av = avatar_img.convert("RGBA").resize((av_size, av_size))
++            mask = Image.new("L", (av_size, av_size), 0)
++            ImageDraw.Draw(mask).ellipse([0, 0, av_size, av_size], fill=255)
++            img.paste(av, (ax, ay), mask)
++            draw = ImageDraw.Draw(img)
++            drew_avatar = True
++        except Exception:
++            drew_avatar = False
++    if not drew_avatar:
++        draw.ellipse([ax, ay, ax + av_size, ay + av_size], fill=(255, 255, 255, 70))
++        letter = (handle[:1] or name[:1] or "X").upper()
++        _draw_centered(
++            draw, letter, (ax + av_size / 2, ay + av_size / 2),
++            _resolve_font(54, bold=True), (255, 255, 255, 255),
++        )
++
++    hx = ax + av_size + 28
++    draw.text((hx, ay + 4), f"@{handle}" if handle else (name or "X"),
++              font=_resolve_font(46, bold=True), fill=(255, 255, 255, 255))
++    if name and handle:
++        draw.text((hx, ay + 58), name[:34],
++                  font=_resolve_font(28, bold=False), fill=(255, 255, 255, 205))
++
++    # X logo badge, top-right.
++    bs = 64
++    bx2, by1 = W - pad, ay
++    draw.rounded_rectangle([bx2 - bs, by1, bx2, by1 + bs], radius=16,
++                           fill=(15, 15, 20, 235))
++    _draw_centered(draw, "X", (bx2 - bs / 2, by1 + bs / 2),
++                   _resolve_font(44, bold=True), (255, 255, 255, 255))
++
++    # Body: the tweet text, wrapped.
++    body_font = _resolve_font(48, bold=True)
++    lines = _wrap_text(draw, meta.get("title") or src.get("text") or "",
++                       body_font, W - 2 * pad, max_lines=4)
++    by = ay + av_size + 46
++    for ln in lines:
++        draw.text((pad, by), ln, font=body_font, fill=(255, 255, 255, 255))
++        by += 62
++
++    # Bottom metrics row + outlier badge.
++    mf = _resolve_font(34, bold=True)
++    my = H - pad - 38
++    likes = "♥ " + _humanize_count(src.get("likes"))
++    draw.text((pad, my), likes, font=mf, fill=(255, 255, 255, 240))
++    rx = pad + draw.textlength(likes, font=mf) + 40
++    draw.text((rx, my), "RT " + _humanize_count(src.get("retweets")),
++              font=mf, fill=(255, 255, 255, 205))
++
++    score = meta.get("outlier_score") or 0
++    try:
++        score = float(score)
++    except (TypeError, ValueError):
++        score = 0
++    if score > 0:
++        label = f"{score:g}x"
++        pf = _resolve_font(34, bold=True)
++        tw = draw.textlength(label, font=pf)
++        px2, padx = W - pad, 24
++        px1 = px2 - (tw + 2 * padx)
++        py1, py2 = my - 8, my + 46
++        pill = (76, 175, 80, 255) if score >= 3 else (
++            (33, 150, 243, 255) if score >= 1.5 else (90, 90, 110, 255))
++        draw.rounded_rectangle([px1, py1, px2, py2], radius=24, fill=pill)
++        _draw_centered(draw, label, ((px1 + px2) / 2, (py1 + py2) / 2), pf,
++                       (255, 255, 255, 255))
++
++    out_path = str(out_path)
++    d = os.path.dirname(out_path)
++    if d:
++        os.makedirs(d, exist_ok=True)
++    img.convert("RGB").save(out_path, "PNG")
++    return out_path
++
++
+ @app.context_processor
+ def _inject_open_signup():
+     """Expose the self-host flag to every template so Skool CTAs / trial copy
+@@ -8949,6 +9269,258 @@ def twitter_feed():
+     return jsonify([dict(r) for r in rows])
+ 
+ 
++# ── X Inspiration: discover inspiring posts via twitterapi.io ────────────────
++#
++# Mirrors the YouTube channels → viral-videos flow. Tracked X handles (and ad-hoc
++# keyword searches) pull posts through tweet_to_video_meta() and _ingest_x_tweet()
++# into the `videos` table as Ideas cards with a generated credit-card tile.
++
++def _twitterapi_get(path: str, params: dict, api_key: str | None):
++    """GET a twitterapi.io endpoint and return parsed JSON, or None on failure /
++    missing key. Auth is a single x-api-key header (no OAuth)."""
++    from urllib.parse import urlencode
++    key = api_key or TWITTERAPI_IO_KEY
++    if not key:
++        return None
++    try:
++        url = f"{TWITTERAPI_BASE}{path}?" + urlencode(params)
++        req = Request(url, headers={"x-api-key": key, "User-Agent": "creatorgrowth"})
++        with urlopen(req, timeout=25) as r:
++            return json.loads(r.read().decode("utf-8"))
++    except Exception:
++        return None
++
++
++def twitterapi_search(query, query_type="Top", api_key=None, cursor=""):
++    """Advanced tweet search → list of raw tweet objects (may be empty)."""
++    params = {"query": query, "queryType": query_type}
++    if cursor:
++        params["cursor"] = cursor
++    data = _twitterapi_get("/twitter/tweet/advanced_search", params, api_key)
++    return (data or {}).get("tweets") or []
++
++
++def twitterapi_user_tweets(handle, api_key=None, cursor=""):
++    """A handle's recent tweets → list of raw tweet objects (may be empty)."""
++    params = {"userName": (handle or "").lstrip("@")}
++    if cursor:
++        params["cursor"] = cursor
++    data = _twitterapi_get("/twitter/user/last_tweets", params, api_key) or {}
++    inner = data.get("data") or {}
++    return inner.get("tweets") or data.get("tweets") or []
++
++
++def _ingest_x_tweet(conn, uid: int, meta: dict):
++    """Insert one X post as a `videos` row (+ source bundle) and generate its
++    credit-card tile. Returns the new row id, or None if this user already has it."""
++    if conn.execute(
++        "SELECT 1 FROM videos WHERE video_id = ? AND user_id = ?",
++        (meta["video_id"], uid),
++    ).fetchone():
++        return None
++    tweet_id = meta["video_id"][2:]  # strip "x_"
++    try:
++        out_path = UPLOAD_DIR / "x_cards" / f"{tweet_id}.png"
++        avatar = _fetch_avatar_image(meta.get("channel_thumb") or "")
++        generate_x_card_image(meta, str(out_path), avatar_img=avatar)
++        meta["thumbnail_url"] = f"/static/uploads/x_cards/{tweet_id}.png"
++    except Exception:
++        meta["thumbnail_url"] = meta.get("channel_thumb") or ""
++    conn.execute(
++        """INSERT INTO videos (video_id, title, channel_title, channel_thumb,
++               thumbnail_url, view_count, duration, published_at, status,
++               outlier_score, channel_avg_views, user_id)
++           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'options', ?, ?, ?)""",
++        (meta["video_id"], meta["title"], meta["channel_title"], meta["channel_thumb"],
++         meta["thumbnail_url"], meta["view_count"], meta["duration"],
++         meta["published_at"], meta["outlier_score"], meta["channel_avg_views"], uid),
++    )
++    row = conn.execute(
++        "SELECT id FROM videos WHERE video_id = ? AND user_id = ?",
++        (meta["video_id"], uid),
++    ).fetchone()
++    if meta.get("_source"):
++        conn.execute(
++            "INSERT INTO video_details (video_id, meta) VALUES (?, ?)",
++            (row["id"], json.dumps({"source": meta["_source"]})),
++        )
++    conn.commit()
++    return row["id"]
++
++
++def _rank_and_ingest_tweets(conn, uid, tweets, limit=12, min_likes=0):
++    """Rank tweets by likes (skipping replies) and ingest the top `limit`."""
++    ranked = sorted(
++        [t for t in (tweets or []) if not t.get("isReply")],
++        key=lambda t: int(t.get("likeCount") or 0),
++        reverse=True,
++    )
++    added = 0
++    for t in ranked:
++        if int(t.get("likeCount") or 0) < min_likes:
++            continue
++        meta = tweet_to_video_meta(t)
++        if meta["video_id"] == "x_":  # malformed (no id)
++            continue
++        if _ingest_x_tweet(conn, uid, meta) is not None:
++            added += 1
++        if added >= limit:
++            break
++    return added
++
++
++def _x_inspo_guard():
++    """X Inspiration is admin-gated (Andy dogfoods on real data). Returns
++    (uid, None) for an admin session, else (None, (response, status))."""
++    uid = _request_user_id()
++    if uid is None:
++        return None, (jsonify({"error": "Unauthorized"}), 401)
++    if not _is_admin_email(session.get("identity_email") or session.get("email", "")):
++        return None, (jsonify({"error": "Admin only"}), 403)
++    return uid, None
++
++
++@app.route("/api/x-creators", methods=["GET"])
++def list_x_creators():
++    uid, err = _x_inspo_guard()
++    if err:
++        return err
++    conn = get_db()
++    rows = conn.execute(
++        "SELECT * FROM x_creators WHERE user_id = ? ORDER BY added_at DESC", (uid,)
++    ).fetchall()
++    conn.close()
++    return jsonify([dict(r) for r in rows])
++
++
++@app.route("/api/x-creators", methods=["POST"])
++def add_x_creator():
++    uid, err = _x_inspo_guard()
++    if err:
++        return err
++    data = request.get_json(force=True) or {}
++    handle = (data.get("handle") or "").strip().lstrip("@")
++    # Tolerate a pasted profile URL (x.com/handle, twitter.com/handle).
++    m = re.search(r"(?:x|twitter)\.com/([A-Za-z0-9_]+)", handle)
++    if m:
++        handle = m.group(1)
++    handle = handle.strip("/").split("/")[0]
++    if not handle:
++        return jsonify({"error": "No handle provided"}), 400
++    conn = get_db()
++    if conn.execute(
++        "SELECT 1 FROM x_creators WHERE lower(handle) = lower(?) AND user_id = ?",
++        (handle, uid),
++    ).fetchone():
++        conn.close()
++        return jsonify({"error": "Creator already added"}), 409
++    conn.execute(
++        "INSERT INTO x_creators (handle, user_id) VALUES (?, ?)", (handle, uid)
++    )
++    conn.commit()
++    row = conn.execute(
++        "SELECT * FROM x_creators WHERE lower(handle) = lower(?) AND user_id = ?",
++        (handle, uid),
++    ).fetchone()
++    conn.close()
++    return jsonify(dict(row)), 201
++
++
++@app.route("/api/x-creators/<int:cid>", methods=["DELETE"])
++def delete_x_creator(cid):
++    uid, err = _x_inspo_guard()
++    if err:
++        return err
++    conn = get_db()
++    owned = conn.execute(
++        "SELECT 1 FROM x_creators WHERE id = ? AND user_id = ?", (cid, uid)
++    ).fetchone()
++    if not owned:
++        conn.close()
++        return jsonify({"error": "Not found"}), 404
++    conn.execute("DELETE FROM x_creators WHERE id = ?", (cid,))
++    conn.commit()
++    conn.close()
++    return jsonify({"ok": True})
++
++
++def _pull_one_x_creator(conn, uid, row, limit=12, min_likes=0):
++    """Pull a single creator's recent posts into Ideas. Updates the creator's
++    cached name/avatar/followers from the response. Returns count added."""
++    tweets = twitterapi_user_tweets(row["handle"])
++    added = _rank_and_ingest_tweets(conn, uid, tweets, limit=limit, min_likes=min_likes)
++    # Refresh the creator's display fields from the first tweet's author.
++    author = (tweets[0].get("author") if tweets else None) or {}
++    conn.execute(
++        "UPDATE x_creators SET name = ?, avatar = ?, followers = ?, "
++        "last_pulled = datetime('now') WHERE id = ?",
++        (author.get("name") or row["name"] or "",
++         author.get("profilePicture") or row["avatar"] or "",
++         int(author.get("followers") or row["followers"] or 0),
++         row["id"]),
++    )
++    conn.commit()
++    return added
++
++
++@app.route("/api/x-creators/<int:cid>/pull", methods=["POST"])
++def pull_x_creator(cid):
++    uid, err = _x_inspo_guard()
++    if err:
++        return err
++    conn = get_db()
++    row = conn.execute(
++        "SELECT * FROM x_creators WHERE id = ? AND user_id = ?", (cid, uid)
++    ).fetchone()
++    if not row:
++        conn.close()
++        return jsonify({"error": "Not found"}), 404
++    added = _pull_one_x_creator(conn, uid, row)
++    conn.close()
++    return jsonify({"ok": True, "added": added})
++
++
++@app.route("/api/x-creators/pull-all", methods=["POST"])
++def pull_all_x_creators():
++    uid, err = _x_inspo_guard()
++    if err:
++        return err
++    conn = get_db()
++    rows = conn.execute(
++        "SELECT * FROM x_creators WHERE user_id = ?", (uid,)
++    ).fetchall()
++    total = 0
++    for row in rows:
++        total += _pull_one_x_creator(conn, uid, row)
++    conn.close()
++    return jsonify({"ok": True, "added": total, "creators": len(rows)})
++
++
++@app.route("/api/x-inspiration/search", methods=["POST"])
++def x_inspiration_search():
++    uid, err = _x_inspo_guard()
++    if err:
++        return err
++    data = request.get_json(force=True) or {}
++    query = (data.get("query") or "").strip()
++    if not query:
++        return jsonify({"error": "No query provided"}), 400
++    query_type = data.get("queryType") or "Top"
++    try:
++        min_likes = int(data.get("min_likes") or 0)
++    except (TypeError, ValueError):
++        min_likes = 0
++    try:
++        limit = max(1, min(50, int(data.get("limit") or 12)))
++    except (TypeError, ValueError):
++        limit = 12
++    tweets = twitterapi_search(query, query_type=query_type)
++    conn = get_db()
++    added = _rank_and_ingest_tweets(conn, uid, tweets, limit=limit, min_likes=min_likes)
++    conn.close()
++    return jsonify({"ok": True, "added": added, "found": len(tweets)})
++
++
+ def _ring_median_color(img, x, y, w, h, pad=8, ring=24):
+     """Median RGB of pixels in an annulus around the box (pad outside, ring wide).
+     Median resists outliers like the bright text/borders adjacent to box edges that
+diff --git a/templates/index.html b/templates/index.html
+index 3bd5cd3..4ecb5f2 100644
+--- a/templates/index.html
++++ b/templates/index.html
+@@ -3206,6 +3206,11 @@
+         <select class="creator-select" id="creatorFilter" onchange="setCreatorFilter(this.value)">
+             <option value="">Creator</option>
+         </select>
++        <span class="sort-divider x-admin-only" style="display:none;">|</span>
++        <span class="sort-label x-admin-only" style="display:none;">Source:</span>
++        <button class="filter-btn source-btn active x-admin-only" style="display:none;" data-source="all" onclick="setSourceFilter('all')">Both</button>
++        <button class="filter-btn source-btn x-admin-only" style="display:none;" data-source="yt" onclick="setSourceFilter('yt')">YouTube</button>
++        <button class="filter-btn source-btn x-admin-only" style="display:none;" data-source="x" onclick="setSourceFilter('x')">𝕏</button>
+         <span class="sort-divider">|</span>
+         <span class="sort-label">Published:</span>
+         <button class="filter-btn active" data-recency="all" onclick="setRecency('all')">All time</button>
+@@ -3235,6 +3240,31 @@
+             <button class="creator-add-btn" onclick="addCreator()">Add Creator</button>
+         </div>
+         <div class="creator-list" id="creatorList"></div>
++
++        <!-- ── X (Twitter) creators: add @handles, pull their top posts into Ideas ──
++             Admin-gated: the whole block is hidden unless /api/auth-status is_admin. -->
++        <div class="x-admin-only" style="display:none;">
++        <div class="creators-header" style="margin-top:30px; border-top:1px solid #2a2a2a; padding-top:22px;">
++            <h2>𝕏 Creators</h2>
++            <button class="scrape-all-btn" id="pullAllXBtn" onclick="pullAllXCreators()">Pull All</button>
++        </div>
++        <div class="creator-add-row">
++            <input type="text" class="creator-add-input" id="xCreatorInput"
++                   placeholder="@handle or x.com/handle"
++                   autocomplete="off"
++                   onkeydown="if(event.key==='Enter')addXCreator()">
++            <button class="creator-add-btn" onclick="addXCreator()">Add 𝕏 Creator</button>
++        </div>
++        <div class="creator-add-row" style="margin-top:8px;">
++            <input type="text" class="creator-add-input" id="xSearchInput"
++                   placeholder="Or search 𝕏 by keyword → adds top posts to Ideas (e.g. claude code)"
++                   autocomplete="off"
++                   onkeydown="if(event.key==='Enter')searchXInspiration()">
++            <button class="creator-add-btn" onclick="searchXInspiration()">Search &amp; Add</button>
++        </div>
++        <div id="xInspoStatus" style="color:#9c9; font-size:13px; margin:8px 0 0 2px; min-height:16px;"></div>
++        <div class="creator-list" id="xCreatorList"></div>
++        </div><!-- /x-admin-only -->
+     </div>
+     <div class="grid" id="videoGrid"></div>
+ 
+@@ -4253,6 +4283,7 @@
+         let loadingCount = 0;
+         let currentTab = 'options';
+         let currentSort = 'added';
++        let sourceFilter = localStorage.getItem('cg_source_filter') || 'all';  // all | yt | x
+         let currentRecency = 'all';
+         let currentCreatorFilter = '';
+         // Server-rendered auth flag. On /welcome, /join, /activate this is false
+@@ -4270,6 +4301,8 @@
+             if (!CG_AUTHENTICATED) return;  // welcome/join/activate: no authed fetches
+             await loadVideos();
+             await loadChannels();
++            await loadXCreators();
++            syncSourceButtons();
+             autoScrapeIfNeeded();
+             // Backfill dates: RSS first, then deep (yt-dlp individual lookups) for remaining
+             const missingCount = videos.filter(v => !v.time_ago).length;
+@@ -4663,6 +4696,7 @@
+             }
+             if (isCreators) {
+                 renderCreatorList();
++                renderXCreatorList();
+             } else if (isContent) {
+                 loadContentList();
+             } else if (isTwitter) {
+@@ -5575,12 +5609,32 @@
+ 
+         function setRecency(r) {
+             currentRecency = r;
+-            document.querySelectorAll('.filter-btn').forEach(b => {
++            // Scope to recency buttons so the Source (YT/X/Both) buttons, which
++            // share the .filter-btn class, keep their own active state.
++            document.querySelectorAll('.filter-btn[data-recency]').forEach(b => {
+                 b.classList.toggle('active', b.dataset.recency === r);
+             });
+             renderGrid();
+         }
+ 
++        // ── Ideas source filter: YouTube / X / Both ──
++        function isXVideo(v) { return String(v.video_id || '').startsWith('x_'); }
++        function sourceMatches(v) {
++            if (sourceFilter === 'x') return isXVideo(v);
++            if (sourceFilter === 'yt') return !isXVideo(v);
++            return true;
++        }
++        function syncSourceButtons() {
++            document.querySelectorAll('.source-btn').forEach(b =>
++                b.classList.toggle('active', b.dataset.source === sourceFilter));
++        }
++        function setSourceFilter(s) {
++            sourceFilter = s;
++            localStorage.setItem('cg_source_filter', s);
++            syncSourceButtons();
++            renderGrid();
++        }
++
+         function sortVideos(list) {
+             let result = [...list];
+             // Apply creator filter
+@@ -5969,7 +6023,7 @@
+ 
+         function renderGrid() {
+             const grid = document.getElementById('videoGrid');
+-            const all = sortVideos(videos.filter(v => v.status === currentTab));
++            const all = sortVideos(videos.filter(v => v.status === currentTab && sourceMatches(v)));
+             const main = all.filter(v => !v.tucked);
+             const tucked = all.filter(v => v.tucked);
+ 
+@@ -6278,6 +6332,133 @@
+             `}).join('');
+         }
+ 
++        // ── X (Twitter) creators ──────────────────────────────
++        let xCreators = [];
++
++        async function loadXCreators() {
++            try {
++                const resp = await fetch('/api/x-creators');
++                if (!resp.ok) return;
++                xCreators = await resp.json();
++                renderXCreatorList();
++            } catch (e) {}
++        }
++
++        function renderXCreatorList() {
++            const list = document.getElementById('xCreatorList');
++            if (!list) return;
++            if (xCreators.length === 0) {
++                list.innerHTML = `
++                    <div class="creators-empty">
++                        <div class="creators-empty-title">No 𝕏 creators yet</div>
++                        <div class="creators-empty-sub">Add an @handle above, then Pull to load their top posts into Ideas</div>
++                    </div>`;
++                return;
++            }
++            list.innerHTML = xCreators.map(c => `
++                <div class="creator-row">
++                    <a class="creator-avatar" href="https://x.com/${esc(c.handle)}" target="_blank" title="Open on 𝕏" style="cursor:pointer;">
++                        ${c.avatar ? `<img src="${esc(c.avatar)}" alt="">` : ''}
++                    </a>
++                    <div class="creator-info">
++                        <div class="creator-name">${esc(c.name || ('@' + c.handle))}</div>
++                        <div class="creator-url">@${esc(c.handle)}</div>
++                    </div>
++                    <div class="creator-stats">
++                        <div class="creator-stat">
++                            <div class="creator-stat-value">${formatAvgViews(c.followers)}</div>
++                            <div class="creator-stat-label">Followers</div>
++                        </div>
++                    </div>
++                    <div class="creator-last-scraped">${formatLastScraped(c.last_pulled)}</div>
++                    <div class="creator-actions">
++                        <button class="creator-action-btn" id="x-pull-${c.id}" onclick="pullXCreator(${c.id})">Pull</button>
++                        <button class="creator-action-btn remove" onclick="deleteXCreator(${c.id})">Remove</button>
++                    </div>
++                </div>`).join('');
++        }
++
++        async function addXCreator() {
++            const input = document.getElementById('xCreatorInput');
++            const handle = input.value.trim();
++            if (!handle) return;
++            input.value = '';
++            try {
++                const resp = await fetch('/api/x-creators', {
++                    method: 'POST',
++                    headers: { 'Content-Type': 'application/json' },
++                    body: JSON.stringify({ handle }),
++                });
++                const data = await resp.json();
++                if (!resp.ok) { showToast(data.error || 'Failed to add 𝕏 creator', true); return; }
++                xCreators.unshift(data);
++                renderXCreatorList();
++                showToast('𝕏 creator added — click Pull to load posts');
++            } catch (e) { showToast('Network error', true); }
++        }
++
++        async function deleteXCreator(id) {
++            try {
++                await fetch(`/api/x-creators/${id}`, { method: 'DELETE' });
++                xCreators = xCreators.filter(c => c.id !== id);
++                renderXCreatorList();
++            } catch (e) { showToast('Failed to remove 𝕏 creator', true); }
++        }
++
++        async function pullXCreator(id) {
++            const btn = document.getElementById(`x-pull-${id}`);
++            if (btn) { btn.disabled = true; btn.textContent = 'Pulling...'; }
++            try {
++                const resp = await fetch(`/api/x-creators/${id}/pull`, { method: 'POST' });
++                const data = await resp.json();
++                if (!resp.ok) { showToast(data.error || 'Pull failed', true); return; }
++                showToast(`+${data.added} 𝕏 posts added to Ideas`);
++                await loadVideos();
++                await loadXCreators();
++            } catch (e) { showToast('Pull failed', true); }
++            finally {
++                const b = document.getElementById(`x-pull-${id}`);
++                if (b) { b.disabled = false; b.textContent = 'Pull'; }
++            }
++        }
++
++        async function pullAllXCreators() {
++            if (xCreators.length === 0) { showToast('No 𝕏 creators to pull', true); return; }
++            const btn = document.getElementById('pullAllXBtn');
++            if (btn) { btn.disabled = true; btn.textContent = 'Pulling...'; }
++            try {
++                const resp = await fetch('/api/x-creators/pull-all', { method: 'POST' });
++                const data = await resp.json();
++                if (!resp.ok) { showToast(data.error || 'Pull failed', true); return; }
++                showToast(`+${data.added} 𝕏 posts added from ${data.creators} creators`);
++                await loadVideos();
++                await loadXCreators();
++            } catch (e) { showToast('Pull failed', true); }
++            finally {
++                const b = document.getElementById('pullAllXBtn');
++                if (b) { b.disabled = false; b.textContent = 'Pull All'; }
++            }
++        }
++
++        async function searchXInspiration() {
++            const input = document.getElementById('xSearchInput');
++            const query = input.value.trim();
++            if (!query) return;
++            const status = document.getElementById('xInspoStatus');
++            if (status) status.textContent = 'Searching 𝕏…';
++            try {
++                const resp = await fetch('/api/x-inspiration/search', {
++                    method: 'POST',
++                    headers: { 'Content-Type': 'application/json' },
++                    body: JSON.stringify({ query }),
++                });
++                const data = await resp.json();
++                if (!resp.ok) { if (status) status.textContent = data.error || 'Search failed'; return; }
++                if (status) status.textContent = `Added ${data.added} posts to Ideas (found ${data.found}). Switch to Ideas and filter by 𝕏.`;
++                await loadVideos();
++            } catch (e) { if (status) status.textContent = 'Network error'; }
++        }
++
+         async function addCreator() {
+             const input = document.getElementById('creatorInput');
+             const url = input.value.trim();
+@@ -8176,6 +8357,10 @@
+                 if (data.authenticated) applyProfilePic(data.profile_pic || '');
+                 const fac = document.getElementById('factoryMenuItem');
+                 if (fac) fac.style.display = data.is_admin ? '' : 'none';
++                // X Inspiration is admin-gated: reveal its UI only for admins.
++                document.querySelectorAll('.x-admin-only').forEach(el => {
++                    el.style.display = data.is_admin ? '' : 'none';
++                });
+             } catch (e) { /* silent */ }
+         }
+         function openFactory() {
+diff --git a/tests/test_x_inspiration.py b/tests/test_x_inspiration.py
+new file mode 100644
+index 0000000..9afbeca
+--- /dev/null
++++ b/tests/test_x_inspiration.py
+@@ -0,0 +1,277 @@
++"""Unit tests for the X Inspiration feature's pure logic.
++
++These cover the two pure functions that turn a twitterapi.io tweet object into a
++CreatorGrowth `videos`-shaped dict, plus the engagement-outlier math that
++parallels YouTube's view_count / channel_avg_views. No network: we feed a
++representative tweet dict captured from the live API.
++"""
++
++# A representative tweet object in twitterapi.io's shape (trimmed to the fields
++# the mapper reads). Captured from the live advanced_search response.
++SAMPLE_TWEET = {
++    "type": "tweet",
++    "id": "2065597531644743999",
++    "url": "https://x.com/karpathy/status/2065597531644743999",
++    "text": "nanochat: a minimal end-to-end ChatGPT clone in 8000 lines.",
++    "retweetCount": 3400,
++    "replyCount": 412,
++    "likeCount": 21000,
++    "quoteCount": 120,
++    "viewCount": 854742,
++    "bookmarkCount": 900,
++    "createdAt": "Sat Jun 13 00:50:03 +0000 2026",
++    "isReply": False,
++    "conversationId": "2065597531644743999",
++    "author": {
++        "userName": "karpathy",
++        "name": "Andrej Karpathy",
++        "profilePicture": "https://pbs.twimg.com/profile_images/abc_normal.jpg",
++        "followers": 700000,
++        "isBlueVerified": True,
++    },
++    "extendedEntities": {
++        "media": [
++            {"media_url_https": "https://pbs.twimg.com/media/xyz.jpg", "type": "photo"}
++        ]
++    },
++}
++
++
++# ── x_outlier_score ──────────────────────────────────────────────────────────
++
++def test_outlier_score_15x_at_3pct(app_module):
++    # 21000 / 700000 = 3% of followers liked → 1.5x ("warm").
++    assert app_module.x_outlier_score(21000, 700000) == 1.5
++
++
++def test_outlier_score_3x_at_6pct(app_module):
++    # 42000 / 700000 = 6% → 3.0x ("hot").
++    assert app_module.x_outlier_score(42000, 700000) == 3.0
++
++
++def test_outlier_score_zero_followers_is_zero(app_module):
++    # Unknown follower count must not produce an absurd score.
++    assert app_module.x_outlier_score(500, 0) == 0.0
++
++
++def test_outlier_score_zero_likes_is_zero(app_module):
++    assert app_module.x_outlier_score(0, 700000) == 0.0
++
++
++# ── tweet_to_video_meta ──────────────────────────────────────────────────────
++
++def test_meta_video_id_is_x_prefixed(app_module):
++    meta = app_module.tweet_to_video_meta(SAMPLE_TWEET)
++    assert meta["video_id"] == "x_2065597531644743999"
++
++
++def test_meta_channel_title_is_at_handle(app_module):
++    meta = app_module.tweet_to_video_meta(SAMPLE_TWEET)
++    assert meta["channel_title"] == "@karpathy"
++
++
++def test_meta_title_is_tweet_text(app_module):
++    meta = app_module.tweet_to_video_meta(SAMPLE_TWEET)
++    assert meta["title"] == "nanochat: a minimal end-to-end ChatGPT clone in 8000 lines."
++
++
++def test_meta_long_title_truncated(app_module):
++    t = dict(SAMPLE_TWEET, text="x" * 400)
++    meta = app_module.tweet_to_video_meta(t)
++    assert len(meta["title"]) == 200
++    assert meta["title"].endswith("...")
++
++
++def test_meta_view_count(app_module):
++    meta = app_module.tweet_to_video_meta(SAMPLE_TWEET)
++    assert meta["view_count"] == 854742
++
++
++def test_meta_channel_avg_views_is_followers(app_module):
++    # Parallels YouTube channel_avg_views — used as the outlier denominator.
++    meta = app_module.tweet_to_video_meta(SAMPLE_TWEET)
++    assert meta["channel_avg_views"] == 700000
++
++
++def test_meta_outlier_score_matches_helper(app_module):
++    meta = app_module.tweet_to_video_meta(SAMPLE_TWEET)
++    assert meta["outlier_score"] == app_module.x_outlier_score(21000, 700000)
++
++
++def test_meta_published_at_is_iso(app_module):
++    meta = app_module.tweet_to_video_meta(SAMPLE_TWEET)
++    assert meta["published_at"] == "2026-06-13T00:50:03Z"
++
++
++def test_meta_channel_thumb_is_avatar(app_module):
++    meta = app_module.tweet_to_video_meta(SAMPLE_TWEET)
++    assert meta["channel_thumb"] == "https://pbs.twimg.com/profile_images/abc_normal.jpg"
++
++
++def test_meta_source_bundle(app_module):
++    meta = app_module.tweet_to_video_meta(SAMPLE_TWEET)
++    src = meta["_source"]
++    assert src["platform"] == "x"
++    assert src["url"] == "https://x.com/karpathy/status/2065597531644743999"
++    assert src["author_handle"] == "karpathy"
++    assert src["author_name"] == "Andrej Karpathy"
++    assert src["likes"] == 21000
++    assert src["retweets"] == 3400
++    assert src["replies"] == 412
++    assert src["views"] == 854742
++    assert src["followers"] == 700000
++
++
++def test_meta_source_media(app_module):
++    meta = app_module.tweet_to_video_meta(SAMPLE_TWEET)
++    media = meta["_source"]["media"]
++    assert len(media) == 1
++    assert media[0]["url"] == "https://pbs.twimg.com/media/xyz.jpg"
++
++
++def test_meta_handles_missing_author(app_module):
++    # A malformed tweet with no author must not crash the mapper.
++    t = {"id": "123", "text": "hi", "likeCount": 5}
++    meta = app_module.tweet_to_video_meta(t)
++    assert meta["video_id"] == "x_123"
++    assert meta["channel_avg_views"] == 0
++    assert meta["outlier_score"] == 0.0
++
++
++# ── generate_x_card_image (the premium credit-card tile) ─────────────────────
++
++def test_card_image_is_valid_16x9_png(app_module, tmp_path):
++    meta = app_module.tweet_to_video_meta(SAMPLE_TWEET)
++    out = tmp_path / "x_card.png"
++    app_module.generate_x_card_image(meta, str(out))
++    assert out.exists() and out.stat().st_size > 0
++    from PIL import Image
++    with Image.open(out) as im:
++        assert im.format == "PNG"
++        assert im.size == (1200, 675)  # 16:9, fits the YouTube card slot
++
++
++def test_card_image_no_network_avatar_fallback(app_module, tmp_path):
++    # With avatar_img=None the renderer must draw a fallback and never fetch.
++    meta = app_module.tweet_to_video_meta(SAMPLE_TWEET)
++    out = tmp_path / "x_card_noavatar.png"
++    app_module.generate_x_card_image(meta, str(out), avatar_img=None)
++    assert out.exists() and out.stat().st_size > 0
++
++
++def test_card_image_handles_minimal_meta(app_module, tmp_path):
++    # No author, no metrics — must still produce a valid tile, not crash.
++    minimal = app_module.tweet_to_video_meta({"id": "9", "text": "hi"})
++    out = tmp_path / "min.png"
++    app_module.generate_x_card_image(minimal, str(out))
++    assert out.exists() and out.stat().st_size > 0
++
++
++# ── routes: X creators + pull + keyword search ──────────────────────────────
++#
++# These stub the twitterapi.io calls and the (heavy, network-touching) image
++# generation so the route logic is exercised offline. The real wrappers and
++# renderer are covered by the unit tests above.
++
++def _stub_x_io(monkeypatch, app_module):
++    monkeypatch.setattr(app_module, "_fetch_avatar_image", lambda *a, **k: None)
++    monkeypatch.setattr(app_module, "generate_x_card_image",
++                        lambda meta, path, **k: path)
++
++
++def _admin_login(app_module, monkeypatch, seed_user, login_as, email):
++    """Seed + log in an allowlisted user AND mark them admin. X Inspiration is
++    admin-gated (Andy dogfoods on real data), so every happy-path route test
++    needs an admin session."""
++    seed_user(email, email.split("@")[0])
++    monkeypatch.setattr(app_module, "ADMIN_EMAILS",
++                        set(app_module.ADMIN_EMAILS) | {email.lower()})
++    login_as(email)
++
++
++def test_x_creators_requires_auth(client):
++    assert client.get("/api/x-creators").status_code == 401
++
++
++def test_x_routes_require_admin(client, seed_user, login_as):
++    # Authenticated but NOT an admin → gated out everywhere (feature is admin-only).
++    seed_user("nonadmin@example.com", "nonadmin")
++    login_as("nonadmin@example.com")
++    assert client.get("/api/x-creators").status_code == 403
++    assert client.post("/api/x-creators", json={"handle": "x"}).status_code == 403
++    assert client.post("/api/x-inspiration/search",
++                       json={"query": "x"}).status_code == 403
++
++
++def test_x_creators_add_list_delete(client, seed_user, login_as, monkeypatch, app_module):
++    _admin_login(app_module, monkeypatch, seed_user, login_as, "andy@admin.test")
++    r = client.post("/api/x-creators", json={"handle": "@karpathy"})
++    assert r.status_code == 201, r.get_json()
++    assert r.get_json()["handle"] == "karpathy"  # @ stripped, normalized
++    lst = client.get("/api/x-creators").get_json()
++    assert any(c["handle"] == "karpathy" for c in lst)
++    cid = lst[0]["id"]
++    assert client.delete(f"/api/x-creators/{cid}").status_code == 200
++    assert client.get("/api/x-creators").get_json() == []
++
++
++def test_x_creators_dedupes_handle(client, seed_user, login_as, monkeypatch, app_module):
++    _admin_login(app_module, monkeypatch, seed_user, login_as, "andy@admin.test")
++    assert client.post("/api/x-creators", json={"handle": "karpathy"}).status_code == 201
++    assert client.post("/api/x-creators", json={"handle": "@karpathy"}).status_code == 409
++
++
++def test_x_creators_isolated_between_users(client, seed_user, login_as, monkeypatch, app_module):
++    seed_user("alice@example.com", "alice")
++    seed_user("bob@example.com", "bob")
++    monkeypatch.setattr(app_module, "ADMIN_EMAILS",
++                        set(app_module.ADMIN_EMAILS) | {"alice@example.com", "bob@example.com"})
++    login_as("alice@example.com")
++    client.post("/api/x-creators", json={"handle": "karpathy"})
++    login_as("bob@example.com")
++    assert client.get("/api/x-creators").get_json() == []
++
++
++def test_x_creator_pull_creates_ideas_cards(client, seed_user, login_as,
++                                            monkeypatch, app_module):
++    _admin_login(app_module, monkeypatch, seed_user, login_as, "andy@admin.test")
++    client.post("/api/x-creators", json={"handle": "karpathy"})
++    monkeypatch.setattr(app_module, "twitterapi_user_tweets",
++                        lambda *a, **k: [SAMPLE_TWEET])
++    _stub_x_io(monkeypatch, app_module)
++    cid = client.get("/api/x-creators").get_json()[0]["id"]
++    r = client.post(f"/api/x-creators/{cid}/pull")
++    assert r.status_code == 200, r.get_json()
++    assert r.get_json()["added"] >= 1
++    xs = [v for v in client.get("/api/videos").get_json()
++          if str(v["video_id"]).startswith("x_")]
++    assert len(xs) == 1
++    assert xs[0]["status"] == "options"
++    assert xs[0]["channel_title"] == "@karpathy"
++
++
++def test_x_creator_pull_dedupes(client, seed_user, login_as, monkeypatch, app_module):
++    _admin_login(app_module, monkeypatch, seed_user, login_as, "andy@admin.test")
++    client.post("/api/x-creators", json={"handle": "karpathy"})
++    monkeypatch.setattr(app_module, "twitterapi_user_tweets",
++                        lambda *a, **k: [SAMPLE_TWEET])
++    _stub_x_io(monkeypatch, app_module)
++    cid = client.get("/api/x-creators").get_json()[0]["id"]
++    client.post(f"/api/x-creators/{cid}/pull")
++    assert client.post(f"/api/x-creators/{cid}/pull").get_json()["added"] == 0
++    xs = [v for v in client.get("/api/videos").get_json()
++          if str(v["video_id"]).startswith("x_")]
++    assert len(xs) == 1
++
++
++def test_x_search_creates_ideas_cards(client, seed_user, login_as,
++                                      monkeypatch, app_module):
++    _admin_login(app_module, monkeypatch, seed_user, login_as, "andy@admin.test")
++    monkeypatch.setattr(app_module, "twitterapi_search",
++                        lambda *a, **k: [SAMPLE_TWEET])
++    _stub_x_io(monkeypatch, app_module)
++    r = client.post("/api/x-inspiration/search", json={"query": "claude code"})
++    assert r.status_code == 200, r.get_json()
++    assert r.get_json()["added"] >= 1
++    assert any(str(v["video_id"]).startswith("x_")
++               for v in client.get("/api/videos").get_json())

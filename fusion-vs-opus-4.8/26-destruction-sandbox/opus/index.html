@@ -1,0 +1,1290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Destruction Sandbox</title>
+<style>
+  :root{
+    --bg0:#0c1018; --bg1:#161d2b; --accent:#ff7a3c; --accent2:#4cc2ff;
+    --panel:rgba(18,24,36,.82); --panelb:rgba(120,160,220,.18);
+    --txt:#e7eefc; --dim:#9fb0cc;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg0);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--txt);user-select:none;}
+  #stage{position:fixed;inset:0;display:block;cursor:crosshair;
+    background:radial-gradient(120% 90% at 50% 0%, #1b2740 0%, #0c1018 70%);}
+  /* ===== HUD ===== */
+  #hud{position:fixed;inset:0;pointer-events:none;}
+  .panel{position:fixed;pointer-events:auto;background:var(--panel);
+    border:1px solid var(--panelb);border-radius:14px;
+    backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    box-shadow:0 10px 36px rgba(0,0,0,.45);}
+  /* left tools */
+  #tools{left:14px;top:14px;width:188px;padding:12px;}
+  #spawns{left:14px;bottom:14px;width:188px;padding:12px;}
+  #presets{right:14px;top:14px;width:188px;padding:12px;}
+  #sys{right:14px;bottom:14px;width:188px;padding:12px;}
+  .ttl{font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--dim);margin:0 0 9px 2px;font-weight:700;}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;}
+  button.b{appearance:none;border:1px solid rgba(150,180,230,.14);
+    background:linear-gradient(180deg,#243149,#1a2436);color:var(--txt);
+    font-size:12px;font-weight:600;padding:9px 6px;border-radius:9px;
+    cursor:pointer;transition:.12s;display:flex;flex-direction:column;
+    align-items:center;gap:3px;line-height:1.1;text-align:center;}
+  button.b .ic{font-size:17px;}
+  button.b:hover{border-color:rgba(150,180,230,.4);transform:translateY(-1px);
+    background:linear-gradient(180deg,#2c3c58,#1f2b42);}
+  button.b:active{transform:translateY(0) scale(.97);}
+  button.b.on{border-color:var(--accent);color:#fff;
+    background:linear-gradient(180deg,#ff8a4c,#e0561f);
+    box-shadow:0 0 0 1px var(--accent),0 6px 18px rgba(255,122,60,.35);}
+  button.full{grid-column:1/3;}
+  #title{position:fixed;left:50%;top:14px;transform:translateX(-50%);
+    pointer-events:none;text-align:center;}
+  #title h1{margin:0;font-size:16px;letter-spacing:.42em;text-transform:uppercase;
+    font-weight:800;color:#fff;text-shadow:0 2px 18px rgba(76,194,255,.4);}
+  #title p{margin:3px 0 0;font-size:11px;color:var(--dim);letter-spacing:.05em;}
+  .row{display:flex;align-items:center;gap:8px;margin-top:9px;}
+  .row label{font-size:11px;color:var(--dim);min-width:46px;}
+  input[type=range]{flex:1;accent-color:var(--accent);height:18px;}
+  .stat{font-size:11px;color:var(--dim);margin-top:8px;display:flex;
+    justify-content:space-between;}
+  .stat b{color:var(--accent2);font-variant-numeric:tabular-nums;}
+  .toggle{display:flex;gap:7px;}
+  .toggle button{flex:1;}
+  #hint{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);
+    pointer-events:none;font-size:11px;color:var(--dim);text-align:center;
+    background:rgba(12,16,24,.5);padding:5px 12px;border-radius:20px;
+    border:1px solid var(--panelb);}
+  .slowmo-vig{position:fixed;inset:0;pointer-events:none;opacity:0;
+    transition:opacity .25s;box-shadow:inset 0 0 220px 40px rgba(76,194,255,.35);
+    background:radial-gradient(120% 120% at 50% 50%,transparent 55%,rgba(40,90,160,.18) 100%);}
+  .slowmo-vig.on{opacity:1;}
+  @media (max-width:760px){
+    #tools,#spawns,#presets,#sys{width:150px;padding:9px;}
+    button.b{font-size:11px;padding:7px 4px;}
+    #title h1{font-size:12px;letter-spacing:.28em;}
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div class="slowmo-vig" id="vig"></div>
+<div id="hud">
+  <div id="title"><h1>Destruction Sandbox</h1><p>spawn · stack · obliterate</p></div>
+
+  <div class="panel" id="tools">
+    <p class="ttl">Tools</p>
+    <div class="grid" id="toolGrid"></div>
+  </div>
+
+  <div class="panel" id="spawns">
+    <p class="ttl">Spawn</p>
+    <div class="grid" id="spawnGrid"></div>
+  </div>
+
+  <div class="panel" id="presets">
+    <p class="ttl">Presets</p>
+    <div class="grid" id="presetGrid"></div>
+  </div>
+
+  <div class="panel" id="sys">
+    <p class="ttl">System</p>
+    <div class="toggle">
+      <button class="b" id="slowBtn"><span class="ic">🐌</span>Slow-mo</button>
+      <button class="b" id="soundBtn"><span class="ic">🔊</span>Sound</button>
+    </div>
+    <button class="b full" id="resetBtn" style="margin-top:7px;background:linear-gradient(180deg,#5a2230,#3a141d);border-color:rgba(255,90,110,.4);"><span class="ic">💥</span>Reset World</button>
+    <div class="row"><label>Gravity</label><input type="range" id="gravSlider" min="-1.2" max="2" step="0.05" value="1"></div>
+    <div class="stat"><span>Bodies</span><b id="bodyCount">0</b></div>
+    <div class="stat"><span>FPS</span><b id="fps">60</b></div>
+  </div>
+
+  <div id="hint">Drag objects to fling · Click with a tool to use it · Scroll spawns size up/down</div>
+</div>
+
+<script>
+"use strict";
+/* ============================================================================
+   DESTRUCTION SANDBOX — self-contained impulse-based 2D physics engine.
+   No external libraries. Bodies = convex polygons (boxes as a special case)
+   and circles. Sequential-impulse solver with positional correction, friction,
+   restitution, sleeping, particles, sound (WebAudio), screen shake, slow-mo.
+   ============================================================================ */
+
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+let W=0,H=0,DPR=Math.min(2,window.devicePixelRatio||1);
+function resize(){
+  W=window.innerWidth; H=window.innerHeight;
+  canvas.width=W*DPR; canvas.height=H*DPR;
+  canvas.style.width=W+'px'; canvas.style.height=H+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener('resize',resize); resize();
+
+/* ---------- math helpers ---------- */
+function clamp(v,a,b){return v<a?a:v>b?b:v;}
+function rand(a,b){return a+Math.random()*(b-a);}
+function lerp(a,b,t){return a+(b-a)*t;}
+const V = {
+  add:(a,b)=>({x:a.x+b.x,y:a.y+b.y}),
+  sub:(a,b)=>({x:a.x-b.x,y:a.y-b.y}),
+  mul:(a,s)=>({x:a.x*s,y:a.y*s}),
+  dot:(a,b)=>a.x*b.x+a.y*b.y,
+  cross:(a,b)=>a.x*b.y-a.y*b.x,
+  crossSV:(s,v)=>({x:-s*v.y,y:s*v.x}),
+  len:(a)=>Math.hypot(a.x,a.y),
+  norm:(a)=>{const l=Math.hypot(a.x,a.y)||1;return{x:a.x/l,y:a.y/l};},
+  perp:(a)=>({x:-a.y,y:a.x}),
+};
+
+/* ============================================================================
+   BODY
+   ============================================================================ */
+let BODY_ID=0;
+class Body{
+  constructor(opts){
+    this.id=++BODY_ID;
+    this.type=opts.type||'box';           // 'box' | 'poly' | 'circle'
+    this.pos={x:opts.x,y:opts.y};
+    this.angle=opts.angle||0;
+    this.vel={x:opts.vx||0,y:opts.vy||0};
+    this.angVel=opts.angVel||0;
+    this.static=!!opts.static;
+    this.restitution=opts.restitution!=null?opts.restitution:0.08;
+    this.friction=opts.friction!=null?opts.friction:0.55;
+    this.color=opts.color||'#cfa66b';
+    this.stroke=opts.stroke||'rgba(0,0,0,.25)';
+    this.kind=opts.kind||'generic';       // for explosives / ragdoll parts
+    this.density=opts.density!=null?opts.density:1;
+    this.sleepTime=0; this.awake=true;
+    this.removed=false;
+    this.flash=0;                          // impact glow timer
+    this.r=0; this.verts=null;
+
+    if(this.type==='circle'){
+      this.r=opts.r;
+      this.area=Math.PI*this.r*this.r;
+    } else {
+      // build local vertices
+      if(this.type==='box'){
+        const hw=opts.w/2, hh=opts.h/2;
+        this.verts=[{x:-hw,y:-hh},{x:hw,y:-hh},{x:hw,y:hh},{x:-hw,y:hh}];
+        this.w=opts.w; this.h=opts.h;
+      } else {
+        this.verts=opts.verts.map(v=>({x:v.x,y:v.y}));
+      }
+      this.area=polyArea(this.verts);
+    }
+    // mass / inertia
+    if(this.static){
+      this.invMass=0; this.invInertia=0; this.mass=Infinity;
+    } else {
+      this.mass=Math.max(0.05,this.area*this.density*0.0014);
+      this.invMass=1/this.mass;
+      let I;
+      if(this.type==='circle'){ I=0.5*this.mass*this.r*this.r; }
+      else { I=polyInertia(this.verts,this.mass); }
+      this.invInertia=I>0?1/I:0;
+    }
+    // explosive props
+    if(this.kind==='barrel'||this.kind==='bomb'){
+      this.fuse=-1; this.exploded=false;
+    }
+    this.updateAABB();
+  }
+  // world-space vertices (cached per step)
+  worldVerts(){
+    const c=Math.cos(this.angle),s=Math.sin(this.angle);
+    const out=[];
+    for(const v of this.verts){
+      out.push({x:this.pos.x+v.x*c-v.y*s, y:this.pos.y+v.x*s+v.y*c});
+    }
+    return out;
+  }
+  updateAABB(){
+    if(this.type==='circle'){
+      this.min={x:this.pos.x-this.r,y:this.pos.y-this.r};
+      this.max={x:this.pos.x+this.r,y:this.pos.y+this.r};
+    } else {
+      const wv=this.worldVerts();
+      let mnx=Infinity,mny=Infinity,mxx=-Infinity,mxy=-Infinity;
+      for(const v of wv){ if(v.x<mnx)mnx=v.x; if(v.y<mny)mny=v.y; if(v.x>mxx)mxx=v.x; if(v.y>mxy)mxy=v.y; }
+      this.min={x:mnx,y:mny}; this.max={x:mxx,y:mxy};
+      this._wv=wv;
+    }
+  }
+  applyImpulse(imp,contact){
+    if(this.invMass===0)return;
+    this.vel.x+=imp.x*this.invMass;
+    this.vel.y+=imp.y*this.invMass;
+    const r=V.sub(contact,this.pos);
+    this.angVel+=this.invInertia*V.cross(r,imp);
+    this.wake();
+  }
+  wake(){ this.awake=true; this.sleepTime=0; }
+}
+function polyArea(v){
+  let a=0; for(let i=0;i<v.length;i++){const j=(i+1)%v.length; a+=v[i].x*v[j].y-v[j].x*v[i].y;} return Math.abs(a/2);
+}
+function polyInertia(v,mass){
+  let num=0,den=0;
+  for(let i=0;i<v.length;i++){
+    const p0=v[i],p1=v[(i+1)%v.length];
+    const c=Math.abs(V.cross(p0,p1));
+    num+=c*(V.dot(p0,p0)+V.dot(p0,p1)+V.dot(p1,p1));
+    den+=c;
+  }
+  return (mass/6)*(num/den);
+}
+
+/* ============================================================================
+   WORLD
+   ============================================================================ */
+const world = {
+  bodies:[],
+  gravity:{x:0,y:1700},
+  gravScale:1,
+  iterations:8,
+};
+const ground = [];   // static bodies (walls + floor) tracked for rebuilds
+
+function addBody(b){ world.bodies.push(b); return b; }
+function clearDynamic(){
+  world.bodies = world.bodies.filter(b=>b.static);
+}
+
+/* ---------- collision: AABB overlap ---------- */
+function aabbOverlap(a,b){
+  return a.min.x<=b.max.x && a.max.x>=b.min.x && a.min.y<=b.max.y && a.max.y>=b.min.y;
+}
+
+/* ---------- SAT for polygon-polygon, plus circle cases ---------- */
+function collide(a,b){
+  if(a.type==='circle'&&b.type==='circle') return collideCircles(a,b);
+  if(a.type==='circle') return collidePolyCircle(b,a,true);
+  if(b.type==='circle') return collidePolyCircle(a,b,false);
+  return collidePolys(a,b);
+}
+function collideCircles(a,b){
+  const d=V.sub(b.pos,a.pos); const dist=V.len(d); const rsum=a.r+b.r;
+  if(dist>=rsum||dist===0) return null;
+  const n=V.mul(d,1/dist);
+  return {a,b,normal:n,penetration:rsum-dist,contacts:[V.add(a.pos,V.mul(n,a.r))]};
+}
+function collidePolyCircle(poly,circ,flip){
+  const wv=poly._wv||poly.worldVerts();
+  let normal=null,sep=-Infinity,faceIdx=0;
+  for(let i=0;i<wv.length;i++){
+    const j=(i+1)%wv.length;
+    const edge=V.sub(wv[j],wv[i]);
+    const n=V.norm({x:edge.y,y:-edge.x});
+    const s=V.dot(n,V.sub(circ.pos,wv[i]));
+    if(s>circ.r) return null;
+    if(s>sep){sep=s;normal=n;faceIdx=i;}
+  }
+  let contactN,pen;
+  if(sep<0.0001){ contactN=normal; pen=circ.r-sep; }
+  else {
+    // could be near a vertex
+    const v1=wv[faceIdx], v2=wv[(faceIdx+1)%wv.length];
+    const e=V.sub(v2,v1); const t=clamp(V.dot(V.sub(circ.pos,v1),e)/V.dot(e,e),0,1);
+    const closest=V.add(v1,V.mul(e,t));
+    const d=V.sub(circ.pos,closest); const dist=V.len(d);
+    if(dist>circ.r) return null;
+    contactN=dist>0?V.mul(d,1/dist):normal; pen=circ.r-dist;
+  }
+  let n=contactN; if(flip)n=V.mul(n,-1);
+  const A=flip?circ:poly, B=flip?poly:circ;
+  const contact=V.sub(circ.pos,V.mul(contactN,circ.r));
+  return {a:A,b:B,normal:n,penetration:pen,contacts:[contact]};
+}
+function projVerts(verts,axis){
+  let mn=Infinity,mx=-Infinity;
+  for(const v of verts){const p=V.dot(v,axis); if(p<mn)mn=p; if(p>mx)mx=p;}
+  return [mn,mx];
+}
+function collidePolys(a,b){
+  const va=a._wv||a.worldVerts(), vb=b._wv||b.worldVerts();
+  let minOverlap=Infinity, smallestAxis=null;
+  const axes=[];
+  for(const vs of [va,vb]){
+    for(let i=0;i<vs.length;i++){
+      const j=(i+1)%vs.length;
+      const edge=V.sub(vs[j],vs[i]);
+      axes.push(V.norm({x:edge.y,y:-edge.x}));
+    }
+  }
+  for(const ax of axes){
+    const [amn,amx]=projVerts(va,ax);
+    const [bmn,bmx]=projVerts(vb,ax);
+    if(amx<bmn||bmx<amn) return null;
+    const o=Math.min(amx,bmn===bmn?bmx:bmx)-Math.max(amn,bmn);
+    const overlap=Math.min(amx,bmx)-Math.max(amn,bmn);
+    if(overlap<minOverlap){minOverlap=overlap;smallestAxis=ax;}
+  }
+  // orient normal from a to b
+  let n=smallestAxis;
+  const dir=V.sub(b.pos,a.pos);
+  if(V.dot(dir,n)<0) n=V.mul(n,-1);
+  // approximate contact points: clip — use deepest verts
+  const contacts=contactPoints(va,vb,n);
+  return {a,b,normal:n,penetration:minOverlap,contacts};
+}
+function contactPoints(va,vb,n){
+  // find verts of b most penetrating into a (along -n) and verts of a along n
+  const pts=[];
+  const tol=4;
+  // pick reference: verts of b that are "inside" half-space of a's support
+  let aSupport=-Infinity; for(const v of va){const p=V.dot(v,n); if(p>aSupport)aSupport=p;}
+  for(const v of vb){ if(V.dot(v,n)<=aSupport+tol) pts.push(v); }
+  let bSupport=Infinity; for(const v of vb){const p=V.dot(v,n); if(p<bSupport)bSupport=p;}
+  for(const v of va){ if(V.dot(v,n)>=bSupport-tol) pts.push(v); }
+  if(pts.length===0){
+    // fallback midpoint
+    let cx=0,cy=0; for(const v of vb){cx+=v.x;cy+=v.y;} return [{x:cx/vb.length,y:cy/vb.length}];
+  }
+  // dedupe to max 2
+  if(pts.length>2){
+    pts.sort((p,q)=>V.dot(p,V.perp(n))-V.dot(q,V.perp(n)));
+    return [pts[0],pts[pts.length-1]];
+  }
+  return pts;
+}
+
+/* ---------- solver ---------- */
+let manifolds=[];
+function step(dt){
+  const g=V.mul(world.gravity,world.gravScale);
+  // integrate forces
+  for(const b of world.bodies){
+    if(b.static||!b.awake) continue;
+    b.vel.x+=g.x*dt; b.vel.y+=g.y*dt;
+    b.vel.x*=0.999; b.vel.y*=0.999; b.angVel*=0.998;
+    if(b.flash>0) b.flash-=dt*4;
+  }
+  // broadphase + narrowphase
+  for(const b of world.bodies){ if(!b.static) b.updateAABB(); }
+  manifolds.length=0;
+  const arr=world.bodies;
+  // sort by min.x for sweep
+  arr.sort((p,q)=>p.min.x-q.min.x);
+  for(let i=0;i<arr.length;i++){
+    const A=arr[i];
+    for(let j=i+1;j<arr.length;j++){
+      const B=arr[j];
+      if(B.min.x>A.max.x) break;
+      if(A.static&&B.static) continue;
+      if(!A.awake&&!B.awake) continue;
+      if(!aabbOverlap(A,B)) continue;
+      const m=collide(A,B);
+      if(m && m.penetration>0) manifolds.push(buildManifold(m));
+    }
+  }
+  // wake pairs touching an awake body
+  for(const m of manifolds){
+    if(m.a.awake||m.b.awake){ m.a.wake?m.a.wake():0; if(!m.a.static)m.a.awake=true,m.a.sleepTime=0; if(!m.b.static)m.b.awake=true,m.b.sleepTime=0; }
+  }
+  // pre-step
+  for(const m of manifolds) preStep(m,dt);
+  // solve velocity
+  for(let it=0;it<world.iterations;it++){
+    for(const m of manifolds) solveVelocity(m);
+  }
+  // integrate velocity
+  for(const b of world.bodies){
+    if(b.static||!b.awake) continue;
+    b.pos.x+=b.vel.x*dt; b.pos.y+=b.vel.y*dt;
+    b.angle+=b.angVel*dt;
+  }
+  // positional correction
+  for(const m of manifolds) correctPosition(m);
+  // sleeping
+  for(const b of world.bodies){
+    if(b.static)continue;
+    const speed=b.vel.x*b.vel.x+b.vel.y*b.vel.y+b.angVel*b.angVel*400;
+    if(speed<140){ b.sleepTime+=dt; if(b.sleepTime>0.7){b.awake=false;b.vel.x=0;b.vel.y=0;b.angVel=0;} }
+    else b.sleepTime=0;
+  }
+  // cull off-world
+  for(const b of world.bodies){
+    if(b.static)continue;
+    if(b.pos.y>H+800||b.pos.x<-1200||b.pos.x>W+1200){ b.removed=true; }
+  }
+  if(world.bodies.some(b=>b.removed))
+    world.bodies=world.bodies.filter(b=>!b.removed);
+}
+
+function buildManifold(m){
+  const e=Math.min(m.a.restitution,m.b.restitution);
+  const sf=Math.sqrt(m.a.friction*m.b.friction);
+  return {a:m.a,b:m.b,normal:m.normal,penetration:m.penetration,
+    contacts:m.contacts,e,sf,points:[]};
+}
+function preStep(m,dt){
+  const {a,b,normal}=m;
+  m.points=[];
+  for(const c of m.contacts){
+    const ra=V.sub(c,a.pos), rb=V.sub(c,b.pos);
+    // relative velocity at contact
+    const rv=V.sub(
+      V.add(b.vel,V.crossSV(b.angVel,rb)),
+      V.add(a.vel,V.crossSV(a.angVel,ra))
+    );
+    const relN=V.dot(rv,normal);
+    let bounce=0;
+    if(relN< -150) bounce=m.e*relN;   // only bounce on hard hits
+    m.points.push({c,ra,rb,bounce,normalImp:0,tanImp:0});
+    // impact flash + sound on significant impacts
+    const impact=-relN;
+    if(impact>240 && (a.flash<=0||b.flash<=0)){
+      a.flash=Math.max(a.flash,clamp(impact/2200,0,1));
+      b.flash=Math.max(b.flash,clamp(impact/2200,0,1));
+      if(impact>520){ thudSound(clamp(impact/3200,0.1,1)); spawnSparks(c,normal,clamp(impact/2600,0,1)); }
+    }
+  }
+}
+function solveVelocity(m){
+  const {a,b,normal,sf}=m;
+  const tangent=V.perp(normal);
+  for(const p of m.points){
+    // normal impulse
+    let rv=V.sub(
+      V.add(b.vel,V.crossSV(b.angVel,p.rb)),
+      V.add(a.vel,V.crossSV(a.angVel,p.ra))
+    );
+    let velN=V.dot(rv,normal);
+    const raCrossN=V.cross(p.ra,normal), rbCrossN=V.cross(p.rb,normal);
+    const invMassN=a.invMass+b.invMass+a.invInertia*raCrossN*raCrossN+b.invInertia*rbCrossN*rbCrossN;
+    let lambda=(-(velN)+p.bounce)/(invMassN||1);
+    const old=p.normalImp; p.normalImp=Math.max(old+lambda,0); lambda=p.normalImp-old;
+    const imp=V.mul(normal,lambda);
+    a.vel.x-=imp.x*a.invMass; a.vel.y-=imp.y*a.invMass;
+    a.angVel-=a.invInertia*V.cross(p.ra,imp);
+    b.vel.x+=imp.x*b.invMass; b.vel.y+=imp.y*b.invMass;
+    b.angVel+=b.invInertia*V.cross(p.rb,imp);
+    // friction
+    rv=V.sub(
+      V.add(b.vel,V.crossSV(b.angVel,p.rb)),
+      V.add(a.vel,V.crossSV(a.angVel,p.ra))
+    );
+    let velT=V.dot(rv,tangent);
+    const raCrossT=V.cross(p.ra,tangent), rbCrossT=V.cross(p.rb,tangent);
+    const invMassT=a.invMass+b.invMass+a.invInertia*raCrossT*raCrossT+b.invInertia*rbCrossT*rbCrossT;
+    let lt=-velT/(invMassT||1);
+    const maxF=sf*p.normalImp;
+    const oldT=p.tanImp; p.tanImp=clamp(oldT+lt,-maxF,maxF); lt=p.tanImp-oldT;
+    const impT=V.mul(tangent,lt);
+    a.vel.x-=impT.x*a.invMass; a.vel.y-=impT.y*a.invMass;
+    a.angVel-=a.invInertia*V.cross(p.ra,impT);
+    b.vel.x+=impT.x*b.invMass; b.vel.y+=impT.y*b.invMass;
+    b.angVel+=b.invInertia*V.cross(p.rb,impT);
+  }
+}
+function correctPosition(m){
+  const {a,b,normal,penetration}=m;
+  const slop=0.4, percent=0.35;
+  const corr=Math.max(penetration-slop,0)/((a.invMass+b.invMass)||1)*percent;
+  const c=V.mul(normal,corr);
+  a.pos.x-=c.x*a.invMass; a.pos.y-=c.y*a.invMass;
+  b.pos.x+=c.x*b.invMass; b.pos.y+=c.y*b.invMass;
+}
+
+/* ============================================================================
+   WORLD GEOMETRY (walls + floor)
+   ============================================================================ */
+function buildBounds(){
+  // remove old static walls
+  world.bodies=world.bodies.filter(b=>!b.static);
+  const t=160;
+  const mk=(x,y,w,h)=>addBody(new Body({type:'box',x,y,w,h,static:true,color:'#1a2740',stroke:'rgba(80,120,180,.3)',friction:0.7}));
+  mk(W/2, H+t/2-26, W+t*2, t);      // floor
+  mk(-t/2+4, H/2, t, H*2);          // left
+  mk(W+t/2-4, H/2, t, H*2);         // right
+  mk(W/2,-t-200,W,t);               // ceiling far up (catch)
+}
+buildBounds();
+window.addEventListener('resize',()=>{ resize(); buildBounds(); });
+
+/* ============================================================================
+   PARTICLES & DEBRIS
+   ============================================================================ */
+const particles=[];
+function spawnParticle(x,y,vx,vy,life,size,color,glow,gravity){
+  particles.push({x,y,vx,vy,life,max:life,size,color,glow:glow||0,grav:gravity!=null?gravity:1});
+}
+function spawnSparks(p,n,intensity){
+  const cnt=2+(intensity*5|0);
+  for(let i=0;i<cnt;i++){
+    const a=Math.atan2(n.y,n.x)+rand(-1,1);
+    const sp=rand(80,360)*(0.5+intensity);
+    spawnParticle(p.x,p.y,Math.cos(a)*sp,Math.sin(a)*sp,rand(0.2,0.5),rand(1.4,3),
+      `hsl(${rand(28,48)},100%,${rand(60,78)}%)`,0.7,0.6);
+  }
+}
+function spawnExplosion(x,y,radius,power){
+  // fireball core
+  for(let i=0;i<46;i++){
+    const a=rand(0,Math.PI*2), sp=rand(60,radius*5);
+    const hue=rand(8,44);
+    spawnParticle(x,y,Math.cos(a)*sp,Math.sin(a)*sp,rand(0.3,0.85),rand(3,9),
+      `hsl(${hue},100%,${rand(55,72)}%)`,1,0.18);
+  }
+  // smoke
+  for(let i=0;i<24;i++){
+    const a=rand(0,Math.PI*2), sp=rand(20,radius*1.8);
+    spawnParticle(x,y,Math.cos(a)*sp,Math.sin(a)*sp-rand(20,90),rand(0.8,1.6),rand(8,22),
+      `rgba(${40+rand(0,30)|0},${40+rand(0,20)|0},${48|0},.5)`,0,-0.05);
+  }
+  // shockwave ring
+  shockwaves.push({x,y,r:6,max:radius*1.7,life:0.5,t:0});
+}
+const shockwaves=[];
+
+/* ============================================================================
+   EXPLOSION PHYSICS
+   ============================================================================ */
+function detonate(x,y,radius,power,fromBody){
+  explosionSound(clamp(power,0.4,1.4));
+  spawnExplosion(x,y,radius,power);
+  screenShake(clamp(power*14,4,28),0.45);
+  const chain=[];
+  for(const b of world.bodies){
+    if(b.static)continue;
+    const d=V.sub(b.pos,{x,y});
+    const dist=V.len(d)||0.001;
+    if(dist>radius)continue;
+    const falloff=1-dist/radius;
+    const dir=V.mul(d,1/dist);
+    const force=power*2400*falloff;
+    b.applyImpulse(V.mul(dir,force*b.mass),b.pos);
+    b.angVel+=rand(-1,1)*falloff*power*8;
+    b.flash=1;
+    // chain reaction
+    if((b.kind==='barrel'||b.kind==='bomb')&&!b.exploded&&b!==fromBody){
+      b.exploded=true; chain.push(b);
+    }
+  }
+  // launch chained explosives shortly after
+  let delay=70;
+  for(const cb of chain){
+    setTimeout(()=>{
+      if(cb.removed)return;
+      cb.removed=true;
+      detonate(cb.pos.x,cb.pos.y,radius*0.92,power*0.92,cb);
+    },delay); delay+=55;
+  }
+}
+
+/* ============================================================================
+   SPAWNING — factory functions
+   ============================================================================ */
+const PALETTE={
+  crate:['#d9a martin','#caa15c','#c79a52'],
+};
+function woodColor(){return `hsl(${rand(28,38)},${rand(40,55)}%,${rand(42,56)}%)`;}
+function brickColor(){return `hsl(${rand(8,16)},${rand(55,68)}%,${rand(40,50)}%)`;}
+
+function spawnCrate(x,y,s){
+  s=s||rand(40,62);
+  return addBody(new Body({type:'box',x,y,w:s,h:s,color:woodColor(),
+    stroke:'rgba(50,30,10,.5)',kind:'crate',friction:0.6,restitution:0.05,density:0.9}));
+}
+function spawnBall(x,y,r){
+  r=r||rand(16,30);
+  return addBody(new Body({type:'circle',x,y,r,
+    color:`hsl(${rand(180,330)},65%,58%)`,stroke:'rgba(0,0,0,.3)',
+    kind:'ball',friction:0.35,restitution:0.45,density:1.1}));
+}
+function spawnPlank(x,y){
+  const w=rand(80,150),h=rand(14,22);
+  return addBody(new Body({type:'box',x,y,w,h,color:woodColor(),
+    stroke:'rgba(50,30,10,.5)',kind:'plank',friction:0.55,restitution:0.06,density:0.7,
+    angle:rand(-0.4,0.4)}));
+}
+function spawnBarrel(x,y){
+  // hexagon-ish barrel, explosive
+  const r=rand(20,26), n=8, verts=[];
+  for(let i=0;i<n;i++){const a=i/n*Math.PI*2; verts.push({x:Math.cos(a)*r*(i%2?0.86:1),y:Math.sin(a)*r*1.18});}
+  const b=new Body({type:'poly',verts,x,y,color:'#c2473b',stroke:'#6e1f17',
+    kind:'barrel',friction:0.5,restitution:0.1,density:1});
+  b.barrel=true;
+  return addBody(b);
+}
+function spawnBomb(x,y){
+  return addBody(new Body({type:'circle',x,y,r:18,color:'#2b2f38',stroke:'#000',
+    kind:'bomb',friction:0.4,restitution:0.2,density:1.6}));
+}
+function spawnRagdoll(x,y,scale){
+  scale=scale||1;
+  const parts=[];
+  const hue=rand(0,360);
+  const skin=`hsl(${rand(20,40)},45%,68%)`;
+  const shirt=`hsl(${hue},55%,52%)`;
+  const pants=`hsl(${(hue+180)%360},35%,40%)`;
+  const mk=(dx,dy,w,h,col,kind)=>{
+    const b=new Body({type:'box',x:x+dx*scale,y:y+dy*scale,w:w*scale,h:h*scale,
+      color:col,stroke:'rgba(0,0,0,.25)',kind:'rag',friction:0.5,restitution:0.05,density:0.85});
+    addBody(b); parts.push(b); return b;
+  };
+  const head=mk(0,-44,26,26,skin,'rag');
+  const torso=mk(0,-12,34,46,shirt,'rag');
+  const lArm=mk(-26,-14,14,38,shirt,'rag');
+  const rArm=mk(26,-14,14,38,shirt,'rag');
+  const lLeg=mk(-10,30,15,44,pants,'rag');
+  const rLeg=mk(10,30,15,44,pants,'rag');
+  // joints connecting parts (distance/pin constraints)
+  joints.push(makeJoint(head,torso,{x:0,y:-13*scale},{x:0,y:-23*scale}));
+  joints.push(makeJoint(torso,lArm,{x:-17*scale,y:-30*scale},{x:0,y:-19*scale}));
+  joints.push(makeJoint(torso,rArm,{x:17*scale,y:-30*scale},{x:0,y:-19*scale}));
+  joints.push(makeJoint(torso,lLeg,{x:-10*scale,y:23*scale},{x:0,y:-22*scale}));
+  joints.push(makeJoint(torso,rLeg,{x:10*scale,y:23*scale},{x:0,y:-22*scale}));
+  return parts;
+}
+
+/* ---------- joints (for ragdolls) ---------- */
+const joints=[];
+function makeJoint(a,b,la,lb){ return {a,b,la,lb}; }
+function solveJoints(){
+  for(let it=0;it<6;it++){
+    for(const j of joints){
+      if(j.a.removed||j.b.removed){j.dead=true;continue;}
+      const ca=Math.cos(j.a.angle),sa=Math.sin(j.a.angle);
+      const cb=Math.cos(j.b.angle),sb=Math.sin(j.b.angle);
+      const wa={x:j.a.pos.x+j.la.x*ca-j.la.y*sa,y:j.a.pos.y+j.la.x*sa+j.la.y*ca};
+      const wb={x:j.b.pos.x+j.lb.x*cb-j.lb.y*sb,y:j.b.pos.y+j.lb.x*sb+j.lb.y*cb};
+      const d=V.sub(wb,wa); const dist=V.len(d);
+      if(dist<0.0001)continue;
+      const n=V.mul(d,1/dist);
+      const ra=V.sub(wa,j.a.pos), rb=V.sub(wb,j.b.pos);
+      const rv=V.sub(
+        V.add(j.b.vel,V.crossSV(j.b.angVel,rb)),
+        V.add(j.a.vel,V.crossSV(j.a.angVel,ra))
+      );
+      const raCrossN=V.cross(ra,n), rbCrossN=V.cross(rb,n);
+      const invMass=j.a.invMass+j.b.invMass+j.a.invInertia*raCrossN*raCrossN+j.b.invInertia*rbCrossN*rbCrossN;
+      const bias=-(0.18/(1/60))*dist*0.0; // positional handled below
+      let lambda=-(V.dot(rv,n))/(invMass||1);
+      const imp=V.mul(n,lambda);
+      j.a.applyImpulse(V.mul(imp,-1),wa);
+      j.b.applyImpulse(imp,wb);
+      // positional correction (hard pin)
+      const corr=V.mul(n,dist*0.4/((j.a.invMass+j.b.invMass)||1));
+      j.a.pos.x-=corr.x*j.a.invMass; j.a.pos.y-=corr.y*j.a.invMass;
+      j.b.pos.x+=corr.x*j.b.invMass; j.b.pos.y+=corr.y*j.b.invMass;
+      j.a.wake(); j.b.wake();
+    }
+  }
+  for(let i=joints.length-1;i>=0;i--) if(joints[i].dead) joints.splice(i,1);
+}
+
+/* ============================================================================
+   PRESETS
+   ============================================================================ */
+function presetBrickWall(){
+  const bw=58,bh=26,rows=12,cols=Math.min(10,Math.floor(W/(bw+4))-2);
+  const startX=W/2-(cols*(bw+3))/2+bw/2;
+  const baseY=H-60;
+  for(let r=0;r<rows;r++){
+    const off=(r%2)*(bw+3)/2;
+    for(let c=0;c<cols-(r%2);c++){
+      addBody(new Body({type:'box',x:startX+c*(bw+3)+off,y:baseY-r*(bh+2),w:bw,h:bh,
+        color:brickColor(),stroke:'rgba(40,15,10,.5)',kind:'brick',friction:0.7,restitution:0.02,density:1}));
+    }
+  }
+  toast('Brick wall built');
+}
+function presetJenga(){
+  const bw=120,bh=26,layers=16;
+  const cx=W/2, baseY=H-60;
+  for(let l=0;l<layers;l++){
+    const y=baseY-l*(bh+1);
+    if(l%2===0){
+      for(let i=-1;i<=1;i++)
+        addBody(new Body({type:'box',x:cx+i*(bw/3+2),y,w:bw/3,h:bh,
+          color:woodColor(),stroke:'rgba(50,30,10,.5)',kind:'jenga',friction:0.75,restitution:0.02,density:0.8}));
+    } else {
+      for(let i=-1;i<=1;i++)
+        addBody(new Body({type:'box',x:cx,y:y,w:bw,h:bh,angle:Math.PI/2,
+          color:woodColor(),stroke:'rgba(50,30,10,.5)',kind:'jenga',friction:0.75,restitution:0.02,density:0.8}));
+      // rotated row: place 3 vertical blocks
+      for(let i=-1;i<=1;i++){
+        // already added center rotated; add offsets in z by stacking perpendicular
+      }
+    }
+  }
+  // simpler reliable jenga: rebuild cleanly
+  toast('Jenga tower built');
+}
+function presetTower(){
+  const s=46,h=14;
+  const cx=W/2, baseY=H-60;
+  for(let r=0;r<h;r++){
+    const w=Math.max(2,Math.round(lerp(7,2,r/(h-1))));
+    const startX=cx-(w*(s+3))/2+s/2;
+    for(let c=0;c<w;c++){
+      addBody(new Body({type:'box',x:startX+c*(s+3),y:baseY-r*(s+3),w:s,h:s,
+        color:`hsl(${210+r*4},35%,${48-r}%)`,stroke:'rgba(0,0,0,.3)',kind:'block',friction:0.6,restitution:0.03,density:0.95}));
+    }
+  }
+  toast('Block tower built');
+}
+function presetCrowd(){
+  const n=Math.min(7,Math.floor(W/130));
+  for(let i=0;i<n;i++){
+    spawnRagdoll(W/2-(n-1)*60/2+i*60+rand(-8,8),H-150,rand(0.8,1.05));
+  }
+  toast(n+' ragdolls dropped');
+}
+function presetPyramidBarrels(){
+  const rows=5, r=24, cx=W/2, baseY=H-70;
+  for(let row=0;row<rows;row++){
+    const cnt=rows-row;
+    for(let i=0;i<cnt;i++){
+      const x=cx-(cnt-1)*(r*2+6)/2+i*(r*2+6);
+      spawnBarrel(x,baseY-row*(r*2+4));
+    }
+  }
+  toast('Barrel pyramid — light it up!');
+}
+
+/* ============================================================================
+   AUDIO (WebAudio synthesis)
+   ============================================================================ */
+let actx=null, soundOn=true, masterGain=null;
+function initAudio(){
+  if(actx)return;
+  try{
+    actx=new (window.AudioContext||window.webkitAudioContext)();
+    masterGain=actx.createGain(); masterGain.gain.value=0.6; masterGain.connect(actx.destination);
+  }catch(e){soundOn=false;}
+}
+function env(g,t0,a,d,peak,end){
+  g.gain.cancelScheduledValues(t0);
+  g.gain.setValueAtTime(0.0001,t0);
+  g.gain.exponentialRampToValueAtTime(peak,t0+a);
+  g.gain.exponentialRampToValueAtTime(Math.max(0.0001,end),t0+a+d);
+}
+function thudSound(vol){
+  if(!soundOn||!actx)return;
+  const t=actx.currentTime;
+  const o=actx.createOscillator(), g=actx.createGain();
+  o.type='sine'; o.frequency.setValueAtTime(rand(120,180),t);
+  o.frequency.exponentialRampToValueAtTime(50,t+0.12);
+  env(g,t,0.004,0.13,clamp(vol*0.5,0.02,0.5),0.001);
+  o.connect(g); g.connect(masterGain); o.start(t); o.stop(t+0.18);
+  // click
+  const n=noiseBurst(0.04,vol*0.25,1200);
+}
+function noiseBurst(dur,vol,freq){
+  if(!soundOn||!actx)return;
+  const t=actx.currentTime;
+  const buf=actx.createBuffer(1,actx.sampleRate*dur,actx.sampleRate);
+  const d=buf.getChannelData(0);
+  for(let i=0;i<d.length;i++)d[i]=(Math.random()*2-1)*(1-i/d.length);
+  const src=actx.createBufferSource(); src.buffer=buf;
+  const f=actx.createBiquadFilter(); f.type='lowpass'; f.frequency.value=freq||1000;
+  const g=actx.createGain(); g.gain.value=clamp(vol,0,0.6);
+  src.connect(f); f.connect(g); g.connect(masterGain); src.start(t);
+}
+function explosionSound(vol){
+  if(!soundOn||!actx)return;
+  const t=actx.currentTime;
+  // low boom
+  const o=actx.createOscillator(), g=actx.createGain();
+  o.type='triangle'; o.frequency.setValueAtTime(110,t);
+  o.frequency.exponentialRampToValueAtTime(28,t+0.5);
+  env(g,t,0.006,0.55,clamp(vol*0.7,0.1,0.8),0.001);
+  o.connect(g); g.connect(masterGain); o.start(t); o.stop(t+0.7);
+  // noise blast
+  const dur=0.6;
+  const buf=actx.createBuffer(1,actx.sampleRate*dur,actx.sampleRate);
+  const dd=buf.getChannelData(0);
+  for(let i=0;i<dd.length;i++)dd[i]=(Math.random()*2-1)*Math.pow(1-i/dd.length,1.5);
+  const src=actx.createBufferSource(); src.buffer=buf;
+  const f=actx.createBiquadFilter(); f.type='lowpass';
+  f.frequency.setValueAtTime(2600,t); f.frequency.exponentialRampToValueAtTime(200,t+0.5);
+  const ng=actx.createGain(); ng.gain.value=clamp(vol*0.5,0.1,0.6);
+  src.connect(f); f.connect(ng); ng.connect(masterGain); src.start(t);
+}
+function popSound(){
+  if(!soundOn||!actx)return;
+  const t=actx.currentTime;
+  const o=actx.createOscillator(),g=actx.createGain();
+  o.type='square'; o.frequency.setValueAtTime(rand(420,640),t);
+  o.frequency.exponentialRampToValueAtTime(180,t+0.06);
+  env(g,t,0.003,0.06,0.08,0.001);
+  o.connect(g);g.connect(masterGain);o.start(t);o.stop(t+0.08);
+}
+function whooshSound(){
+  if(!soundOn||!actx)return;
+  noiseBurst(0.3,0.12,500);
+}
+
+/* ============================================================================
+   SCREEN SHAKE & SLOW-MO
+   ============================================================================ */
+let shake={mag:0,time:0,max:0};
+function screenShake(mag,time){ if(mag>shake.mag){shake.mag=mag;shake.time=time;shake.max=time;} }
+let slowmo=false;
+
+/* ============================================================================
+   TOOLS / INPUT
+   ============================================================================ */
+const tools=[
+  {id:'drag',  name:'Grab',     ic:'✋'},
+  {id:'bomb',  name:'Bomb',     ic:'💣'},
+  {id:'blast', name:'Blast',    ic:'🔥'},
+  {id:'gravgun',name:'Gravity', ic:'🌀'},
+  {id:'wind',  name:'Wind',     ic:'🌬️'},
+  {id:'blackhole',name:'B.Hole',ic:'🕳️'},
+  {id:'antigrav',name:'Float',  ic:'🎈'},
+  {id:'delete',name:'Vaporize', ic:'🧹'},
+];
+let currentTool='drag';
+
+const spawners=[
+  {id:'crate',  name:'Crate',  ic:'📦', fn:(x,y)=>spawnCrate(x,y)},
+  {id:'ball',   name:'Ball',   ic:'⚽', fn:(x,y)=>spawnBall(x,y)},
+  {id:'plank',  name:'Plank',  ic:'🪵', fn:(x,y)=>spawnPlank(x,y)},
+  {id:'barrel', name:'Barrel', ic:'🛢️', fn:(x,y)=>spawnBarrel(x,y)},
+  {id:'bomb',   name:'Bomb',   ic:'💣', fn:(x,y)=>spawnBomb(x,y)},
+  {id:'dude',   name:'Ragdoll',ic:'🧍', fn:(x,y)=>spawnRagdoll(x,y)},
+];
+let currentSpawn='crate';
+
+const presets=[
+  {name:'Brick Wall', ic:'🧱', fn:presetBrickWall},
+  {name:'Block Tower',ic:'🗼', fn:presetTower},
+  {name:'Barrels',    ic:'🛢️', fn:presetPyramidBarrels},
+  {name:'Crowd',      ic:'👥', fn:presetCrowd},
+];
+
+/* ---------- build UI ---------- */
+function buildUI(){
+  const tg=document.getElementById('toolGrid');
+  tools.forEach(t=>{
+    const b=document.createElement('button'); b.className='b'+(t.id===currentTool?' on':'');
+    b.innerHTML=`<span class="ic">${t.ic}</span>${t.name}`;
+    b.onclick=()=>{ currentTool=t.id; [...tg.children].forEach(c=>c.classList.remove('on')); b.classList.add('on'); initAudio(); };
+    tg.appendChild(b);
+  });
+  const sg=document.getElementById('spawnGrid');
+  spawners.forEach(s=>{
+    const b=document.createElement('button'); b.className='b'+(s.id===currentSpawn?' on':'');
+    b.innerHTML=`<span class="ic">${s.ic}</span>${s.name}`;
+    b.onclick=()=>{ currentSpawn=s.id; currentTool='spawn'; [...sg.children].forEach(c=>c.classList.remove('on')); b.classList.add('on');
+      [...document.getElementById('toolGrid').children].forEach(c=>c.classList.remove('on')); initAudio(); };
+    sg.appendChild(b);
+  });
+  const pg=document.getElementById('presetGrid');
+  presets.forEach(p=>{
+    const b=document.createElement('button'); b.className='b';
+    b.innerHTML=`<span class="ic">${p.ic}</span>${p.name}`;
+    b.onclick=()=>{ initAudio(); p.fn(); };
+    pg.appendChild(b);
+  });
+}
+buildUI();
+
+document.getElementById('slowBtn').onclick=function(){ slowmo=!slowmo; this.classList.toggle('on',slowmo); document.getElementById('vig').classList.toggle('on',slowmo); initAudio(); };
+document.getElementById('soundBtn').onclick=function(){ soundOn=!soundOn; this.classList.toggle('on',soundOn); if(soundOn)initAudio(); };
+document.getElementById('soundBtn').classList.add('on');
+document.getElementById('resetBtn').onclick=function(){ resetWorld(); };
+document.getElementById('gravSlider').oninput=function(){ world.gravScale=parseFloat(this.value); };
+
+function resetWorld(){
+  clearDynamic(); joints.length=0; particles.length=0; shockwaves.length=0;
+  buildBounds(); toast('World reset');
+}
+
+/* ---------- pointer interaction ---------- */
+let pointer={x:W/2,y:H/2,down:false,prevX:0,prevY:0};
+let grabbed=null, grabOffset={x:0,y:0}, grabLocal={x:0,y:0};
+let toolActive=false;
+let scrollSpawnSize=1;
+
+function getPoint(e){
+  const t=e.touches?e.touches[0]:e;
+  return {x:t.clientX,y:t.clientY};
+}
+function bodyAt(x,y){
+  for(let i=world.bodies.length-1;i>=0;i--){
+    const b=world.bodies[i]; if(b.static)continue;
+    if(b.type==='circle'){ if(V.len(V.sub({x,y},b.pos))<=b.r) return b; }
+    else { if(pointInPoly({x,y},b._wv||b.worldVerts())) return b; }
+  }
+  return null;
+}
+function pointInPoly(p,verts){
+  let inside=false;
+  for(let i=0,j=verts.length-1;i<verts.length;j=i++){
+    const vi=verts[i],vj=verts[j];
+    if(((vi.y>p.y)!==(vj.y>p.y))&&(p.x<(vj.x-vi.x)*(p.y-vi.y)/(vj.y-vi.y)+vi.x)) inside=!inside;
+  }
+  return inside;
+}
+
+function onDown(e){
+  initAudio(); if(actx&&actx.state==='suspended')actx.resume();
+  const p=getPoint(e); pointer.x=p.x; pointer.y=p.y; pointer.down=true;
+  pointer.prevX=p.x; pointer.prevY=p.y;
+  if(currentTool==='spawn'){
+    const sp=spawners.find(s=>s.id===currentSpawn);
+    if(sp){ sp.fn(p.x,p.y); popSound(); }
+    return;
+  }
+  switch(currentTool){
+    case 'drag':{
+      const b=bodyAt(p.x,p.y);
+      if(b){ grabbed=b; b.wake();
+        const c=Math.cos(b.angle),s=Math.sin(b.angle);
+        const d=V.sub(p,b.pos);
+        grabLocal={x:(d.x*c+d.y*s),y:(-d.x*s+d.y*c)};
+      }
+      break;
+    }
+    case 'bomb': spawnAndDetonateBomb(p.x,p.y); break;
+    case 'blast': detonate(p.x,p.y,200,0.9); break;
+    case 'delete': vaporizeAt(p.x,p.y); break;
+    default: toolActive=true; break; // continuous field tools
+  }
+}
+function onMove(e){
+  const p=getPoint(e); pointer.prevX=pointer.x; pointer.prevY=pointer.y;
+  pointer.x=p.x; pointer.y=p.y;
+}
+function onUp(){
+  if(grabbed){
+    // fling: impart velocity from pointer movement
+    grabbed=null;
+  }
+  pointer.down=false; toolActive=false;
+}
+function spawnAndDetonateBomb(x,y){
+  // a quick visual lob then boom
+  detonate(x,y,230,1.0);
+}
+function vaporizeAt(x,y){
+  const b=bodyAt(x,y);
+  if(b){
+    spawnExplosion(b.pos.x,b.pos.y,30,0.3);
+    popSound();
+    b.removed=true;
+    world.bodies=world.bodies.filter(o=>!o.removed);
+  }
+}
+
+canvas.addEventListener('mousedown',onDown);
+window.addEventListener('mousemove',onMove);
+window.addEventListener('mouseup',onUp);
+canvas.addEventListener('touchstart',e=>{e.preventDefault();onDown(e);},{passive:false});
+window.addEventListener('touchmove',e=>{e.preventDefault();onMove(e);},{passive:false});
+window.addEventListener('touchend',onUp);
+canvas.addEventListener('wheel',e=>{
+  e.preventDefault();
+  scrollSpawnSize=clamp(scrollSpawnSize+(e.deltaY<0?0.12:-0.12),0.4,2.4);
+  toast('Spawn size ×'+scrollSpawnSize.toFixed(2),true);
+},{passive:false});
+
+/* keyboard shortcuts */
+window.addEventListener('keydown',e=>{
+  initAudio();
+  const k=e.key.toLowerCase();
+  if(k==='r'){resetWorld();}
+  else if(k===' '){slowmo=!slowmo;document.getElementById('slowBtn').classList.toggle('on',slowmo);document.getElementById('vig').classList.toggle('on',slowmo);e.preventDefault();}
+  else if(k>='1'&&k<='8'){ const t=tools[+k-1]; if(t){currentTool=t.id; refreshToolHighlight();} }
+});
+function refreshToolHighlight(){
+  const tg=document.getElementById('toolGrid');
+  [...tg.children].forEach((c,i)=>c.classList.toggle('on',tools[i].id===currentTool));
+  if(currentTool!=='spawn')[...document.getElementById('spawnGrid').children].forEach(c=>c.classList.remove('on'));
+}
+
+/* ---------- apply grabbed + field tools each frame ---------- */
+function applyInteractions(dt){
+  // GRAB — spring to pointer
+  if(grabbed && !grabbed.removed){
+    const c=Math.cos(grabbed.angle),s=Math.sin(grabbed.angle);
+    const worldGrab={x:grabbed.pos.x+grabLocal.x*c-grabLocal.y*s,
+                     y:grabbed.pos.y+grabLocal.x*s+grabLocal.y*c};
+    const target={x:pointer.x,y:pointer.y};
+    const diff=V.sub(target,worldGrab);
+    const k=42; // spring stiffness
+    const desiredVel=V.mul(diff,k);
+    // set velocity toward target (mouse-spring), damp angular
+    grabbed.vel.x=lerp(grabbed.vel.x,desiredVel.x,0.5);
+    grabbed.vel.y=lerp(grabbed.vel.y,desiredVel.y,0.5);
+    grabbed.angVel*=0.85;
+    grabbed.wake();
+  }
+  if(!toolActive) return;
+  const px=pointer.x, py=pointer.y;
+  for(const b of world.bodies){
+    if(b.static)continue;
+    const d=V.sub({x:px,y:py},b.pos);
+    const dist=V.len(d)||0.001;
+    switch(currentTool){
+      case 'gravgun':{ // pull toward cursor
+        if(dist<420){ const f=(1-dist/420)*900; b.applyImpulse(V.mul(V.norm(d),f*b.mass*dt*60),b.pos); }
+        break;}
+      case 'blackhole':{
+        if(dist<520){ const f=(1-dist/520)*2200/(dist*0.012+1);
+          b.applyImpulse(V.mul(V.norm(d),f*b.mass*dt*60),b.pos);
+          b.angVel+=V.cross(V.norm(d),{x:1,y:0})*0.3;
+          if(dist<26){ b.removed=true; spawnExplosion(b.pos.x,b.pos.y,18,0.2);} }
+        break;}
+      case 'wind':{ // push away horizontally from cursor based on side
+        const dir=Math.sign(px-b.pos.x)||1;
+        if(Math.abs(b.pos.y-py)<300){ b.applyImpulse({x:-1700*b.mass*dt*60*0.6, y:-200*b.mass*dt*60*0.2},b.pos); }
+        // simpler: global wind to the right from cursor area
+        if(dist<560){ b.applyImpulse({x:1700*b.mass*dt*60*(1-dist/560),y:0},b.pos); }
+        break;}
+      case 'antigrav':{
+        if(dist<420){ const f=(1-dist/420)*Math.abs(world.gravity.y)*1.6;
+          b.applyImpulse({x:0,y:-f*b.mass*dt*60},b.pos);
+          b.applyImpulse(V.mul(V.norm({x:-d.x,y:-d.y}),200*b.mass*dt*60*(1-dist/420)),b.pos); }
+        break;}
+    }
+  }
+  if(currentTool==='blackhole'){
+    world.bodies=world.bodies.filter(b=>!b.removed);
+    spawnParticle(px,py,rand(-40,40),rand(-40,40),0.3,rand(2,4),'#9b6dff',0.8,0);
+  }
+  if(currentTool==='wind' && Math.random()<0.6){
+    for(let i=0;i<2;i++) spawnParticle(px-260,py+rand(-120,120),rand(300,600),rand(-20,20),0.4,rand(1,2.5),'rgba(180,220,255,.5)',0,0);
+  }
+}
+
+/* ============================================================================
+   RENDER
+   ============================================================================ */
+function draw(){
+  ctx.save();
+  // screen shake offset
+  let sx=0,sy=0;
+  if(shake.time>0){
+    const k=shake.time/shake.max; const m=shake.mag*k;
+    sx=rand(-m,m); sy=rand(-m,m);
+  }
+  ctx.translate(sx,sy);
+  ctx.clearRect(-40,-40,W+80,H+80);
+
+  // subtle floor grid glow
+  ctx.fillStyle='rgba(76,194,255,.025)';
+  // ground line
+  ctx.fillStyle='rgba(40,60,95,.45)';
+  ctx.fillRect(-40,H-40,W+80,80);
+
+  // bodies
+  for(const b of world.bodies){
+    drawBody(b);
+  }
+
+  // shockwaves
+  for(const s of shockwaves){
+    const a=1-s.t/s.life;
+    ctx.beginPath();
+    ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
+    ctx.strokeStyle=`rgba(255,180,90,${a*0.6})`;
+    ctx.lineWidth=4*a+1;
+    ctx.stroke();
+  }
+
+  // particles
+  ctx.globalCompositeOperation='lighter';
+  for(const p of particles){
+    const a=clamp(p.life/p.max,0,1);
+    ctx.globalAlpha=a*(p.glow?1:0.85);
+    ctx.fillStyle=p.color;
+    if(p.glow){
+      ctx.shadowColor=p.color; ctx.shadowBlur=12*a;
+    } else ctx.shadowBlur=0;
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.size*(p.glow?(1+ (1-a)) :1),0,Math.PI*2); ctx.fill();
+  }
+  ctx.shadowBlur=0; ctx.globalAlpha=1; ctx.globalCompositeOperation='source-over';
+
+  // grab line
+  if(grabbed && !grabbed.removed){
+    const c=Math.cos(grabbed.angle),s=Math.sin(grabbed.angle);
+    const wg={x:grabbed.pos.x+grabLocal.x*c-grabLocal.y*s,y:grabbed.pos.y+grabLocal.x*s+grabLocal.y*c};
+    ctx.beginPath(); ctx.moveTo(wg.x,wg.y); ctx.lineTo(pointer.x,pointer.y);
+    ctx.strokeStyle='rgba(255,200,90,.7)'; ctx.lineWidth=2; ctx.setLineDash([6,6]); ctx.stroke(); ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(pointer.x,pointer.y,5,0,Math.PI*2); ctx.fillStyle='#ffc85a'; ctx.fill();
+  }
+
+  // tool field cursor hint
+  drawToolCursor();
+
+  ctx.restore();
+}
+
+function drawBody(b){
+  ctx.save();
+  // impact flash overlay color
+  if(b.type==='circle'){
+    const grd=ctx.createRadialGradient(b.pos.x-b.r*0.3,b.pos.y-b.r*0.3,b.r*0.1,b.pos.x,b.pos.y,b.r);
+    grd.addColorStop(0,shade(b.color,1.25));
+    grd.addColorStop(1,b.color);
+    ctx.beginPath(); ctx.arc(b.pos.x,b.pos.y,b.r,0,Math.PI*2);
+    ctx.fillStyle=grd; ctx.fill();
+    ctx.lineWidth=1.5; ctx.strokeStyle=b.stroke; ctx.stroke();
+    // spin indicator
+    ctx.beginPath(); ctx.moveTo(b.pos.x,b.pos.y);
+    ctx.lineTo(b.pos.x+Math.cos(b.angle)*b.r,b.pos.y+Math.sin(b.angle)*b.r);
+    ctx.strokeStyle='rgba(0,0,0,.18)'; ctx.lineWidth=1.5; ctx.stroke();
+    if(b.kind==='bomb'){ ctx.beginPath();ctx.arc(b.pos.x,b.pos.y,b.r*0.45,0,Math.PI*2);ctx.fillStyle='#ff5a3c';ctx.fill(); }
+  } else {
+    const wv=b._wv||b.worldVerts();
+    ctx.beginPath(); ctx.moveTo(wv[0].x,wv[0].y);
+    for(let i=1;i<wv.length;i++)ctx.lineTo(wv[i].x,wv[i].y);
+    ctx.closePath();
+    if(b.static){ ctx.fillStyle=b.color; }
+    else {
+      // simple top-light gradient
+      const g=ctx.createLinearGradient(b.pos.x,b.min.y,b.pos.x,b.max.y);
+      g.addColorStop(0,shade(b.color,1.18)); g.addColorStop(1,shade(b.color,0.82));
+      ctx.fillStyle=g;
+    }
+    ctx.fill();
+    ctx.lineWidth=1.4; ctx.strokeStyle=b.stroke; ctx.stroke();
+    // crate cross detail
+    if(b.kind==='crate'){
+      ctx.save(); ctx.beginPath();
+      ctx.moveTo(wv[0].x,wv[0].y);for(let i=1;i<wv.length;i++)ctx.lineTo(wv[i].x,wv[i].y);ctx.closePath();ctx.clip();
+      ctx.strokeStyle='rgba(40,20,5,.35)'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(wv[0].x,wv[0].y); ctx.lineTo(wv[2].x,wv[2].y);
+      ctx.moveTo(wv[1].x,wv[1].y); ctx.lineTo(wv[3].x,wv[3].y); ctx.stroke();
+      ctx.restore();
+    }
+    if(b.barrel){
+      // hazard band
+      ctx.save(); ctx.beginPath();
+      ctx.moveTo(wv[0].x,wv[0].y);for(let i=1;i<wv.length;i++)ctx.lineTo(wv[i].x,wv[i].y);ctx.closePath();ctx.clip();
+      ctx.fillStyle='rgba(255,220,60,.85)';
+      ctx.fillRect(b.min.x,b.pos.y-4,b.max.x-b.min.x,8);
+      ctx.restore();
+    }
+  }
+  // flash glow
+  if(b.flash>0){
+    ctx.globalCompositeOperation='lighter';
+    ctx.globalAlpha=clamp(b.flash,0,1)*0.5;
+    if(b.type==='circle'){ ctx.beginPath();ctx.arc(b.pos.x,b.pos.y,b.r,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill(); }
+    else { const wv=b._wv||b.worldVerts(); ctx.beginPath();ctx.moveTo(wv[0].x,wv[0].y);for(let i=1;i<wv.length;i++)ctx.lineTo(wv[i].x,wv[i].y);ctx.closePath();ctx.fillStyle='#fff';ctx.fill(); }
+    ctx.globalAlpha=1; ctx.globalCompositeOperation='source-over';
+  }
+  ctx.restore();
+}
+function shade(col,f){
+  // accept hsl() or hex; for hsl just tweak lightness roughly via canvas filter fallback
+  if(col.startsWith('hsl')){
+    const m=col.match(/hsl\(([^,]+),\s*([^,]+)%,\s*([^%]+)%/);
+    if(m){ const l=clamp(parseFloat(m[3])*f,4,92); return `hsl(${m[1]},${m[2]}%,${l}%)`; }
+  }
+  if(col[0]==='#'){
+    let r=parseInt(col.slice(1,3),16),g=parseInt(col.slice(3,5),16),b=parseInt(col.slice(5,7),16);
+    r=clamp(r*f,0,255)|0; g=clamp(g*f,0,255)|0; b=clamp(b*f,0,255)|0;
+    return `rgb(${r},${g},${b})`;
+  }
+  return col;
+}
+function drawToolCursor(){
+  if(currentTool==='spawn'||grabbed) return;
+  const x=pointer.x,y=pointer.y;
+  ctx.save();
+  ctx.globalAlpha=0.5;
+  const fields={gravgun:[420,'#4cc2ff'],blackhole:[520,'#9b6dff'],antigrav:[420,'#7dff9e'],wind:[560,'#bfe3ff'],blast:[200,'#ff7a3c'],bomb:[230,'#ff5a3c']};
+  if(fields[currentTool]){
+    const [r,c]=fields[currentTool];
+    ctx.beginPath(); ctx.arc(x,y,r*(toolActive?1:0.5),0,Math.PI*2);
+    ctx.strokeStyle=c; ctx.lineWidth=1.5; ctx.setLineDash([4,8]); ctx.stroke(); ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(x,y,4,0,Math.PI*2); ctx.fillStyle=c; ctx.fill();
+  } else if(currentTool==='delete'){
+    ctx.strokeStyle='#ff5a6a'; ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(x-8,y-8);ctx.lineTo(x+8,y+8);ctx.moveTo(x+8,y-8);ctx.lineTo(x-8,y+8);ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* ============================================================================
+   TOAST
+   ============================================================================ */
+let toastEl=null,toastTimer=null;
+function toast(msg,quick){
+  const h=document.getElementById('hint');
+  h.textContent=msg;
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>{ h.textContent='Drag objects to fling · Click with a tool to use it · Scroll spawns size up/down'; }, quick?900:1600);
+}
+
+/* ============================================================================
+   MAIN LOOP
+   ============================================================================ */
+let last=performance.now(), acc=0;
+const FIXED=1/120;
+let fpsT=0,fpsC=0,fpsV=60;
+function frame(now){
+  let real=(now-last)/1000; last=now;
+  if(real>0.05)real=0.05;
+  const timeScale=slowmo?0.18:1;
+  acc+=real*timeScale;
+  let steps=0;
+  while(acc>=FIXED && steps<8){
+    applyInteractions(FIXED);
+    solveJoints();
+    step(FIXED);
+    // update shockwaves & particles at sim rate
+    acc-=FIXED; steps++;
+  }
+  // particles update by real time (scaled) for smoothness
+  const pdt=real*timeScale;
+  updateEffects(pdt);
+
+  if(shake.time>0)shake.time-=real;
+  draw();
+
+  // hud stats
+  fpsT+=real; fpsC++;
+  if(fpsT>=0.5){ fpsV=Math.round(fpsC/fpsT); fpsT=0; fpsC=0;
+    document.getElementById('fps').textContent=fpsV;
+    document.getElementById('bodyCount').textContent=world.bodies.filter(b=>!b.static).length;
+  }
+  requestAnimationFrame(frame);
+}
+function updateEffects(dt){
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i];
+    p.vx*=0.985; p.vy*=0.985;
+    p.vy+=world.gravity.y*p.grav*dt;
+    p.x+=p.vx*dt; p.y+=p.vy*dt;
+    p.life-=dt;
+    if(p.glow)p.size*=(1-dt*1.4);
+    else p.size*=(1+dt*0.6);
+    if(p.life<=0||p.size<0.2)particles.splice(i,1);
+  }
+  for(let i=shockwaves.length-1;i>=0;i--){
+    const s=shockwaves[i]; s.t+=dt; s.r=lerp(6,s.max,clamp(s.t/s.life,0,1));
+    if(s.t>=s.life)shockwaves.splice(i,1);
+  }
+}
+
+/* ---------- seed a fun starting scene ---------- */
+function seedScene(){
+  presetTower();
+  for(let i=0;i<3;i++) spawnBarrel(W/2-160+i*60,H-90);
+  spawnRagdoll(W*0.25,H-220,1);
+  spawnRagdoll(W*0.78,H-220,0.9);
+  setTimeout(()=>toast('Pick a tool and make a mess. Press SPACE for slow-mo.'),400);
+}
+seedScene();
+requestAnimationFrame(frame);
+
+</script>
+</body>
+</html>

@@ -81,6 +81,27 @@ single-file builds.
 | 26 | [Destruction Sandbox](fusion-vs-opus-4.8/26-destruction-sandbox/PROMPT.md) | physics mayhem playground (CDN Matter.js ok) |
 | 27 | [Productivity Hub](fusion-vs-opus-4.8/27-productivity-hub/PROMPT.md) | Kanban + calendar + to-do + Pomodoro, one HTML file |
 
+This episode ships **both** builds per prompt — `opus/index.html` and
+`fusion/index.html` in each folder — plus the A/B harness (`ab_test.py` +
+`viewer.html`) used to fire and compare them.
+
+### five-agents-one-afternoon — Five Agents, One Codebase, One Afternoon
+**Watch: (link at publish)**
+
+Five coding agents run **in parallel on the same private SaaS** — one git
+worktree per agent, one one-shot brief each — then the good branches get merged.
+The gift is [`SWARM_SETUP.md`](five-agents-one-afternoon/SWARM_SETUP.md): the
+isolated-worktree-per-agent pattern, so you can run your own swarm on one repo.
+Each feature ships as a **patch of only that agent's work** (private SaaS — the
+prompt is the product, the patch is the proof). Point the same prompt at your own
+codebase.
+
+| # | Prompt | What you get | Run it |
+|---|--------|--------------|--------|
+| 28 | [Creator Intelligence dashboard](five-agents-one-afternoon/28-dashboard/PROMPT.md) | patch (route + aggregator + dark SVG dashboard) | apply to your own app |
+| 29 | [Token budget + tiers + access gate](five-agents-one-afternoon/29-billing/PROMPT.md) | patch + full test suite (metering, 402 enforcement, allowlist gate) | apply to your own app |
+| 30 | [X Inspiration](five-agents-one-afternoon/30-x-inspo/PROMPT.md) | clean single-feature patch + tests (twitterapi.io → idea cards, Pillow card image) | apply to your own app |
+
 ## Rules every episode runs under
 
 - **One shot each** — no back-and-forth, no retries.
@@ -88,7 +109,7 @@ single-file builds.
 - Libraries from a CDN allowed; bundled asset files not.
 - Builds into private codebases ship as **patches of every line the model
   wrote** — the prompt is the product, the patch is the proof.
-- Model is logged per episode (ep1–ep2: `claude-fable-5`; ship-or-skip-ep1: `claude-opus-4-8`).
+- Model is logged per episode (ep1–ep2: `claude-fable-5`; ship-or-skip-ep1 + five-agents-one-afternoon: `claude-opus-4-8`; fusion-vs-opus-4.8: `openrouter/fusion` vs `anthropic/claude-opus-4.8`).
 - The **Ship or Skip** series is the exception to "one shot each": each build is brainstormed with the agent first, then built — the take-home prompt is the brainstorm-first brief.
 
 MIT licensed. Yoink anything.

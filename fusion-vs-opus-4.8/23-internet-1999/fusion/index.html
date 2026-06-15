@@ -1,0 +1,1120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NetSurfer '99</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; height:100%; font-family: "MS Sans Serif", Tahoma, Geneva, sans-serif; font-size:12px; overflow:hidden; background:#008080; }
+
+  /* ---------- BOOT / DIAL-UP ---------- */
+  #boot { position:fixed; inset:0; z-index:9999; background:#0a0a2a; color:#cfe; display:flex; align-items:center; justify-content:center; }
+  .dialbox { width:440px; background:#c0c0c0; color:#000; border:2px solid #fff; border-right-color:#404040; border-bottom-color:#404040; box-shadow:3px 3px 0 #000; padding:0; }
+  .titlebar { background:linear-gradient(90deg,#000080,#1084d0); color:#fff; font-weight:bold; padding:3px 6px; display:flex; justify-content:space-between; }
+  .dialbody { padding:14px; }
+  .dialbody p { margin:4px 0; }
+  #dialstatus { min-height:48px; font-family:"Courier New",monospace; background:#000; color:#0f0; padding:6px; border:1px inset #888; white-space:pre-line; }
+  .btn { font-family:inherit; font-size:12px; background:#c0c0c0; border:2px solid #fff; border-right-color:#404040; border-bottom-color:#404040; padding:3px 12px; cursor:pointer; }
+  .btn:active { border:2px solid #404040; border-right-color:#fff; border-bottom-color:#fff; }
+  .progwrap { border:1px inset #888; height:18px; background:#fff; margin-top:6px; padding:2px; }
+  .progbar { height:100%; width:0%; background:#000080; background-image:repeating-linear-gradient(90deg,#000080 0 8px,#1084d0 8px 10px); }
+
+  /* ---------- BROWSER CHROME ---------- */
+  #browser { display:none; flex-direction:column; height:100%; }
+  .menubar { background:#c0c0c0; border-bottom:1px solid #808080; padding:2px 6px; font-size:12px; }
+  .menubar span { padding:1px 7px; }
+  .menubar span:hover { background:#000080; color:#fff; }
+  .toolbar { background:#c0c0c0; border-bottom:2px solid #808080; padding:4px; display:flex; align-items:center; gap:3px; }
+  .tbtn { display:flex; flex-direction:column; align-items:center; min-width:48px; padding:3px 4px; cursor:pointer; border:2px solid #c0c0c0; font-size:11px; }
+  .tbtn:hover { border:2px solid #fff; border-right-color:#404040; border-bottom-color:#404040; }
+  .tbtn:active { border:2px solid #404040; border-right-color:#fff; border-bottom-color:#fff; }
+  .tbtn.disabled { color:#808080; pointer-events:none; }
+  .tbtn .ico { font-size:18px; line-height:1; }
+  .addrbar { background:#c0c0c0; border-top:1px solid #fff; padding:4px 6px; display:flex; align-items:center; gap:6px; }
+  .addrbar label { font-weight:bold; }
+  #addr { flex:1; font-family:"Courier New",monospace; font-size:13px; border:2px inset #888; padding:3px; }
+  .gobtn { background:#c0c0c0; border:2px solid #fff; border-right-color:#404040; border-bottom-color:#404040; padding:2px 10px; cursor:pointer; }
+  #viewport { flex:1; overflow:auto; background:#fff; position:relative; }
+  #page { min-height:100%; }
+  .statusbar { background:#c0c0c0; border-top:2px solid #fff; padding:2px 6px; display:flex; align-items:center; gap:8px; font-size:11px; }
+  .statusbar .stxt { flex:1; }
+  .sprog { width:160px; height:13px; border:1px inset #888; background:#fff; padding:1px; }
+  .sprog > div { height:100%; width:0%; background:#000080; background-image:repeating-linear-gradient(90deg,#000080 0 6px,#3b6ec8 6px 8px); }
+  .secure { font-size:13px; }
+
+  /* loading overlay */
+  #loadveil { position:absolute; inset:0; background:#fff; z-index:50; display:none; align-items:center; justify-content:center; flex-direction:column; gap:8px; color:#000080; }
+  #loadveil .spin { font-size:14px; font-family:"Courier New",monospace; }
+
+  /* ---------- generic page content helpers ---------- */
+  .page { padding:0; }
+  .wrap { max-width:760px; margin:0 auto; }
+  marquee { display:block; }
+  .blink { animation: blinker 1s steps(1) infinite; }
+  @keyframes blinker { 50% { opacity:0; } }
+  .ucbar { text-align:center; padding:6px; font-family:"Comic Sans MS",cursive; }
+  hr.fancy { height:6px; border:none; background:repeating-linear-gradient(90deg,#f0f 0 10px,#0ff 10px 20px,#ff0 20px 30px); }
+  .counter { display:inline-block; background:#000; color:#0f0; font-family:"Courier New",monospace; padding:2px 5px; letter-spacing:3px; border:2px outset #444; }
+  .btn88 { display:inline-block; width:88px; height:31px; line-height:11px; font-size:9px; text-align:center; color:#fff; border:1px solid #000; margin:2px; padding-top:3px; cursor:pointer; overflow:hidden; font-family:Tahoma,sans-serif; }
+  a { color:#0000ee; }
+  a:visited { color:#551a8b; }
+  .gb-entry { background:#ffffe0; border:1px dashed #888; margin:6px 0; padding:6px; }
+  .webring { border:3px ridge #999; padding:8px; margin:14px 0; text-align:center; background:#000; color:#0f0; font-family:"Courier New",monospace; }
+  .webring a { color:#ff0; }
+  table.layout { border-collapse:collapse; }
+  .midi-toggle { cursor:pointer; }
+
+  /* ---------- AIM widget ---------- */
+  #aim { position:fixed; right:10px; bottom:10px; width:230px; z-index:8000; background:#c0c0c0; border:2px solid #fff; border-right-color:#404040; border-bottom-color:#404040; box-shadow:2px 2px 4px rgba(0,0,0,.5); display:none; }
+  #aim .titlebar { cursor:default; }
+  #aimlog { height:150px; overflow:auto; background:#fff; border:2px inset #888; margin:5px; padding:4px; font-size:11px; }
+  #aimlog .me { color:#cc0000; font-weight:bold; }
+  #aimlog .them { color:#0000cc; font-weight:bold; }
+  #aimrow { display:flex; gap:4px; padding:0 5px 6px; }
+  #aimin { flex:1; border:2px inset #888; font-size:11px; padding:2px; }
+  #aimblink { color:#ff0; }
+</style>
+</head>
+<body>
+
+<!-- ============ BOOT / DIAL-UP ============ -->
+<div id="boot">
+  <div class="dialbox">
+    <div class="titlebar"><span>📞 Connect To: SpiffyNet Dial-Up Networking</span><span>×</span></div>
+    <div class="dialbody">
+      <p><b>Connect to:</b> SpiffyNet 56k</p>
+      <p>User name: <input type="text" value="surfer1999" style="width:140px"></p>
+      <p>Password: <input type="password" value="hunter2" style="width:140px"></p>
+      <p>Phone #: <input type="text" value="1-800-NET-1999" style="width:140px"></p>
+      <div id="dialstatus">Ready to dial.</div>
+      <div class="progwrap"><div class="progbar" id="progbar"></div></div>
+      <p style="text-align:right; margin-top:12px;">
+        <button class="btn" id="connectBtn">Connect</button>
+        <button class="btn" id="cancelBtn">Cancel</button>
+      </p>
+      <p style="font-size:10px;color:#444;">Tip: turn your speakers on for the full 56k experience.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ============ BROWSER ============ -->
+<div id="browser">
+  <div class="menubar">
+    <span>File</span><span>Edit</span><span>View</span><span>Go</span><span>Communicator</span><span>Help</span>
+  </div>
+  <div class="toolbar">
+    <div class="tbtn" id="tb-back"><span class="ico">⬅️</span>Back</div>
+    <div class="tbtn" id="tb-fwd"><span class="ico">➡️</span>Forward</div>
+    <div class="tbtn" id="tb-stop"><span class="ico">✖️</span>Stop</div>
+    <div class="tbtn" id="tb-reload"><span class="ico">🔄</span>Reload</div>
+    <div class="tbtn" id="tb-home"><span class="ico">🏠</span>Home</div>
+    <div style="flex:1"></div>
+    <div class="tbtn" id="tb-search"><span class="ico">🔍</span>Search</div>
+    <div class="tbtn" id="tb-mail"><span class="ico">📧</span>Mail</div>
+    <div class="tbtn" id="tb-print"><span class="ico">🖨️</span>Print</div>
+  </div>
+  <div class="addrbar">
+    <label>📁 Location:</label>
+    <input type="text" id="addr" value="http://www.spiffynet.com/">
+    <button class="gobtn" id="gobtn">Go</button>
+  </div>
+  <div id="viewport">
+    <div id="page"></div>
+    <div id="loadveil"><img alt="" width="32" height="32" src="data:image/gif;base64,R0lGODlhIAAgAPMAAAAAAP///zg4OHh4eLi4uIiIiKamphYWFnp6erKysuTk5OAAAAAAAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh/hpDcmVhdGVkIHdpdGggYWpheGxvYWQuaW5mbwAh+QQJCgAAACwAAAAAIAAgAAAE5xDISWlhperN52JLhSSdRgwVo1ICQAyB0xjLHZnvDS9Wbw=AAAh+QQJCgAAACwAAAAAIAAgAAAE6hDISWlhpefH54AAAACH5BAkKAAAALAAAAAAgACAAAAUAAAAh+QQJCgAAACwAAAAAIAAgAAAEAAAAAA==">
+      <div class="spin">Transferring data from server...</div>
+    </div>
+  </div>
+  <div class="statusbar">
+    <span class="secure" id="lock">🔓</span>
+    <span class="stxt" id="status">Document: Done</span>
+    <div class="sprog"><div id="sprogbar"></div></div>
+  </div>
+</div>
+
+<!-- ============ AIM WIDGET ============ -->
+<div id="aim">
+  <div class="titlebar"><span>💬 BuddyChat - SmarterChild99</span><span class="midi-toggle" id="aimclose">_</span></div>
+  <div id="aimlog"></div>
+  <div id="aimrow">
+    <input type="text" id="aimin" placeholder="Type a message...">
+    <button class="gobtn" id="aimsend">Send</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* =========================================================
+   AUDIO ENGINE  — modem handshake + per-page MIDI-ish loops
+   ========================================================= */
+const Audio99 = (function(){
+  let ctx = null;
+  let musicNodes = [];
+  let musicTimer = null;
+  let musicOn = true;
+
+  function ensure(){ if(!ctx){ ctx = new (window.AudioContext||window.webkitAudioContext)(); } if(ctx.state==='suspended') ctx.resume(); return ctx; }
+
+  // ---- modem handshake ----
+  function tone(freq, start, dur, type='sine', gain=0.18){
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type=type; o.frequency.value=freq;
+    g.gain.setValueAtTime(0,start);
+    g.gain.linearRampToValueAtTime(gain,start+0.01);
+    g.gain.setValueAtTime(gain,start+dur-0.02);
+    g.gain.linearRampToValueAtTime(0,start+dur);
+    o.connect(g); g.connect(ctx.destination);
+    o.start(start); o.stop(start+dur);
+  }
+  function noise(start,dur,gain=0.12){
+    const buf = ctx.createBuffer(1, ctx.sampleRate*dur, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1);
+    const src = ctx.createBufferSource(); src.buffer=buf;
+    const g = ctx.createGain(); g.gain.value=gain;
+    const f = ctx.createBiquadFilter(); f.type='bandpass'; f.frequency.value=1800; f.Q.value=0.7;
+    src.connect(f); f.connect(g); g.connect(ctx.destination);
+    src.start(start); src.stop(start+dur);
+  }
+  function playHandshake(){
+    ensure();
+    let t = ctx.currentTime + 0.05;
+    // dial tone
+    tone(350,t,1.0,'sine',0.12); tone(440,t,1.0,'sine',0.12); t+=1.1;
+    // DTMF dialing blips
+    const dtmf=[[697,1209],[770,1336],[852,1477],[941,1209],[697,1336]];
+    dtmf.forEach(d=>{ tone(d[0],t,0.12,'sine',0.14); tone(d[1],t,0.12,'sine',0.14); t+=0.18; });
+    t+=0.3;
+    // ring
+    for(let r=0;r<2;r++){ tone(440,t,0.4,'sine',0.12); tone(480,t,0.4,'sine',0.12); t+=0.9; }
+    t+=0.2;
+    // carrier / handshake screech
+    tone(1100,t,0.25,'sine',0.16); t+=0.25;
+    tone(2100,t,0.25,'square',0.10); t+=0.25;
+    noise(t,0.5,0.12); tone(1700,t,0.5,'sawtooth',0.07); t+=0.5;
+    tone(2250,t,0.3,'square',0.08); noise(t,0.3,0.10); t+=0.3;
+    // warble
+    for(let i=0;i<6;i++){ tone(1200+Math.random()*1400,t,0.13,i%2?'square':'sawtooth',0.07); noise(t,0.13,0.08); t+=0.13; }
+    // connect chord
+    tone(1000,t,0.6,'sine',0.12); tone(2000,t,0.6,'square',0.05); noise(t,0.6,0.06);
+    return t - ctx.currentTime + 0.6;
+  }
+
+  // ---- chiptune loops (sequence of [semitone-offset, beats]) keyed per page ----
+  const TUNES = {
+    portal:   { bpm:130, wave:'square', base:392, seq:[[0,1],[4,1],[7,1],[12,1],[7,1],[4,1],[0,1],[-5,1]] },
+    fan:      { bpm:120, wave:'triangle', base:330, seq:[[0,1],[2,1],[4,2],[2,1],[0,1],[-3,2]] },
+    band:     { bpm:150, wave:'sawtooth', base:220, seq:[[0,0.5],[0,0.5],[7,1],[5,0.5],[3,0.5],[0,1],[-2,1],[0,1]] },
+    conspiracy:{ bpm:90, wave:'sine', base:174, seq:[[0,2],[1,1],[0,1],[-2,2],[0,2]] },
+    pixel:    { bpm:140, wave:'square', base:523, seq:[[0,0.5],[4,0.5],[7,0.5],[4,0.5],[5,0.5],[2,0.5],[0,1]] },
+    pets:     { bpm:110, wave:'triangle', base:440, seq:[[0,1],[5,1],[4,1],[0,1],[7,1],[5,2]] },
+    movies:   { bpm:125, wave:'square', base:294, seq:[[0,1],[7,1],[12,1],[7,1],[9,1],[5,1]] },
+    games:    { bpm:160, wave:'square', base:330, seq:[[12,0.5],[11,0.5],[12,0.5],[7,0.5],[9,0.5],[12,1]] },
+    recipes:  { bpm:100, wave:'sine', base:349, seq:[[0,1],[2,1],[4,1],[5,1],[4,2]] },
+    ufo:      { bpm:80, wave:'sawtooth', base:196, seq:[[0,2],[3,1],[5,1],[7,2],[3,2]] },
+    angel:    { bpm:95, wave:'triangle', base:392, seq:[[0,2],[4,1],[7,1],[4,2],[0,2]] },
+    cars:     { bpm:145, wave:'sawtooth', base:262, seq:[[0,0.5],[0,0.5],[3,1],[5,1],[7,2]] },
+    web:      { bpm:118, wave:'square', base:466, seq:[[0,1],[-2,1],[-4,1],[-2,1],[0,2]] }
+  };
+
+  function stopMusic(){
+    if(musicTimer){ clearTimeout(musicTimer); musicTimer=null; }
+    musicNodes.forEach(n=>{ try{n.stop();}catch(e){} });
+    musicNodes=[];
+  }
+  function playTune(name){
+    stopMusic();
+    if(!musicOn || !ctx) return;
+    const tune = TUNES[name] || TUNES.portal;
+    const beat = 60/tune.bpm;
+    function loop(){
+      if(!musicOn) return;
+      let t = ctx.currentTime + 0.02;
+      tune.seq.forEach(([semi,beats])=>{
+        const dur = beats*beat;
+        const freq = tune.base * Math.pow(2, semi/12);
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type=tune.wave; o.frequency.value=freq;
+        g.gain.setValueAtTime(0,t);
+        g.gain.linearRampToValueAtTime(0.06,t+0.02);
+        g.gain.exponentialRampToValueAtTime(0.0008,t+dur*0.9);
+        o.connect(g); g.connect(ctx.destination);
+        o.start(t); o.stop(t+dur);
+        musicNodes.push(o);
+        // simple bass
+        if(beats>=1){
+          const b = ctx.createOscillator(), bg = ctx.createGain();
+          b.type='triangle'; b.frequency.value=freq/2;
+          bg.gain.setValueAtTime(0.04,t); bg.gain.exponentialRampToValueAtTime(0.001,t+dur*0.8);
+          b.connect(bg); bg.connect(ctx.destination); b.start(t); b.stop(t+dur); musicNodes.push(b);
+        }
+        t += dur;
+      });
+      const total = tune.seq.reduce((a,[,b])=>a+b,0)*beat;
+      musicTimer = setTimeout(loop, total*1000 - 40);
+    }
+    loop();
+  }
+  function setMusicEnabled(on){ musicOn=on; if(!on) stopMusic(); }
+  function isMusicOn(){ return musicOn; }
+
+  // little click / blip for AIM
+  function blip(){ ensure(); tone(880,ctx.currentTime,0.06,'square',0.08); tone(1320,ctx.currentTime+0.06,0.06,'square',0.06); }
+
+  return { ensure, playHandshake, playTune, stopMusic, setMusicEnabled, isMusicOn, blip };
+})();
+
+/* =========================================================
+   SHARED WIDGET HELPERS (counters, guestbooks, webrings, midi)
+   ========================================================= */
+const Counters = JSON.parse(sessionStorage.getItem('counters')||'{}');
+function counterFor(id, seed){
+  if(Counters[id]===undefined){ Counters[id] = seed + Math.floor(Math.random()*40); }
+  Counters[id]++;
+  sessionStorage.setItem('counters', JSON.stringify(Counters));
+  const s = String(Counters[id]).padStart(6,'0');
+  return s.split('').map(d=>`<span style="padding:0 1px">${d}</span>`).join('');
+}
+function getGB(id){ return JSON.parse(sessionStorage.getItem('gb_'+id)||'null') || []; }
+function saveGB(id, arr){ sessionStorage.setItem('gb_'+id, JSON.stringify(arr)); }
+
+// MIDI control bar markup for a page
+function midiBar(tune){
+  const on = Audio99.isMusicOn();
+  return `<div style="background:#000;color:#0f0;font-family:'Courier New',monospace;padding:3px 8px;text-align:center;border:2px ridge #0a0;margin-bottom:4px;">
+    🎵 NOW PLAYING: <b>${tune}.mid</b> &nbsp;
+    <span class="midi-toggle" data-tune="${tune}" id="midibtn" style="cursor:pointer;border:1px outset #0a0;padding:0 6px;background:#020;">${on?'🔊 STOP':'🔇 PLAY'} MUSIC</span>
+  </div>`;
+}
+
+/* =========================================================
+   GUESTBOOK / SEARCH / WEBRING action handlers (delegated)
+   ========================================================= */
+function bindPageActions(pageId){
+  const pg = document.getElementById('page');
+
+  // MIDI toggle
+  const mb = pg.querySelector('#midibtn');
+  if(mb){
+    mb.addEventListener('click', ()=>{
+      const on = !Audio99.isMusicOn();
+      Audio99.setMusicEnabled(on);
+      if(on) Audio99.playTune(mb.dataset.tune);
+      mb.textContent = on ? '🔊 STOP MUSIC' : '🔇 PLAY MUSIC';
+    });
+  }
+
+  // Guestbook sign
+  const gbForm = pg.querySelector('.gb-form');
+  if(gbForm){
+    gbForm.addEventListener('submit', e=>{
+      e.preventDefault();
+      const id = gbForm.dataset.gb;
+      const name = gbForm.querySelector('.gb-name').value.trim() || 'Anonymous Coward';
+      const msg = gbForm.querySelector('.gb-msg').value.trim();
+      if(!msg){ alert('Please enter a message before signing!'); return; }
+      const arr = getGB(id);
+      arr.unshift({name, msg, date:new Date().toLocaleDateString()});
+      saveGB(id, arr);
+      Router.render(Router.current(), false); // re-render same page
+    });
+  }
+
+  // Search form
+  const sForm = pg.querySelector('#searchform');
+  if(sForm){
+    sForm.addEventListener('submit', e=>{
+      e.preventDefault();
+      const q = pg.querySelector('#searchq').value.trim();
+      Router.go('http://search.spiffynet.com/?q='+encodeURIComponent(q));
+    });
+  }
+
+  // internal links — intercept anchors with data-url
+  pg.querySelectorAll('a[data-url]').forEach(a=>{
+    a.addEventListener('click', e=>{ e.preventDefault(); Router.go(a.dataset.url); });
+  });
+}
+
+/* =========================================================
+   PAGE LIBRARY  — the in-world web
+   Each page: { url, title, render() -> html string, tune }
+   ========================================================= */
+function link(url, label){ return `<a href="${url}" data-url="${url}">${label}</a>`; }
+
+const PAGES = {};
+function reg(url, title, tune, render){ PAGES[url] = {url,title,tune,render}; }
+
+// 88x31 button helper
+function btn88(bg, fg, l1, l2, url){
+  return `<span class="btn88" style="background:${bg};color:${fg}" ${url?`data-url-btn="${url}"`:''}>${l1}<br>${l2}</span>`;
+}
+
+/* ---------- HOME PORTAL ---------- */
+reg('http://www.spiffynet.com/','SpiffyNet - The Web Starts Here!','portal', ()=>{
+  const cats = {
+    'Arts & Entertainment':[['Movies & Film','http://www.spiffynet.com/movie-madness/'],['Music','http://moonbeam.spiffynet.com/~basemen7/'],['Games','http://www.spiffynet.com/pixelpalace/zelda/']],
+    'Computers & Internet':[['Web Design','http://www.spiffynet.com/dazzlepage/'],['Pixel Art','http://www.spiffynet.com/dazzlepage/']],
+    'Society & Culture':[['Conspiracies','http://truth.spiffynet.com/~xfile_dave/'],['UFOs','http://truth.spiffynet.com/~xfile_dave/ufo.html']],
+    'Recreation':[['Cars & Trucks','http://garage.spiffynet.com/~vtec_steve/'],['Pets','http://www.spiffynet.com/petpalace/']],
+    'Reference':[['Recipes','http://kitchen.spiffynet.com/~grandma_betty/']],
+    'Regional':[['Local Bands','http://moonbeam.spiffynet.com/~basemen7/']]
+  };
+  let catHTML='';
+  for(const [k,v] of Object.entries(cats)){
+    catHTML += `<td valign="top" style="padding:6px 14px;"><b style="font-size:14px;color:#7a0000;">${k}</b><ul style="margin:4px 0;padding-left:18px;">`+
+      v.map(([n,u])=>`<li>${link(u,n)}</li>`).join('')+`</ul></td>`;
+  }
+  return `<div class="page" style="background:#ffffff;font-family:Arial,sans-serif;">
+    ${midiBar('portal')}
+    <div style="background:#3300cc;padding:10px;text-align:center;">
+      <span style="font-size:42px;font-family:'Comic Sans MS',cursive;font-weight:bold;color:#ffcc00;text-shadow:3px 3px 0 #000;">Spiffy</span><span style="font-size:42px;font-family:'Comic Sans MS',cursive;font-weight:bold;color:#ffffff;text-shadow:3px 3px 0 #000;">Net!</span>
+      <br><span style="color:#fff;font-style:italic;">"Do you Yahoo? No, we Spiffy!"</span>
+    </div>
+    <div style="background:#ffcc00;text-align:center;padding:8px;">
+      <form id="searchform" style="margin:0;">
+        <b>Search the entire World Wide Web:</b><br>
+        <input type="text" id="searchq" size="40" style="font-size:14px;border:2px inset #999;padding:3px;" placeholder="e.g. zelda, ufo, recipes">
+        <button class="gobtn" type="submit">Search!</button>
+      </form>
+    </div>
+    <marquee scrollamount="5" style="background:#000;color:#0f0;font-family:'Courier New',monospace;padding:3px;">
+      ★ WELCOME TO SPIFFYNET ★ Y2K is coming — are YOU prepared? ★ NEW: Pokémon, MP3s, and the Blair Witch ★ Free email at HotChat! ★ It is currently ${new Date().getFullYear() === 1999 ? '1999' : 'always 1999 on SpiffyNet'} ★
+    </marquee>
+    <div class="wrap" style="padding:10px;">
+      <center><h2 style="color:#3300cc;">SpiffyNet Web Directory <span class="blink" style="color:red;">NEW!</span></h2></center>
+      <table align="center" cellpadding="0"><tr>${catHTML}</tr></table>
+      <hr class="fancy">
+      <center>
+        <p style="font-family:'Comic Sans MS';">You are visitor number:</p>
+        <span class="counter">${counterFor('portal', 1048576)}</span>
+        <p style="font-size:11px;">© 1999 SpiffyNet Communications. <span class="blink">Best viewed in Netscape Navigator 4.0 at 800×600</span></p>
+        <div>${btn88('#cc0000','#fff','SPIFFY','NET 1999','')} ${btn88('#000080','#0f0','NETSCAPE','NOW!','')} ${btn88('#990099','#ff0','Y2K','READY?','http://truth.spiffynet.com/~xfile_dave/')} ${btn88('#006600','#fff','MADE WITH','NOTEPAD','')}</div>
+      </center>
+    </div>
+    <div style="background:#3300cc;color:#fff;text-align:center;padding:6px;font-size:11px;">
+      ${link('http://search.spiffynet.com/?q=','Search')} | ${link('http://hotchat.spiffynet.com/inbox/','Free Email')} | About | Add Your Site | Help
+    </div>
+  </div>`;
+});
+
+/* ---------- SEARCH RESULTS ---------- */
+const SEARCH_INDEX = [
+  {t:'Basement 7 — The Official Fan Shrine', u:'http://moonbeam.spiffynet.com/~basemen7/', d:'The #1 site for the greatest unsigned garage band in the tri-county area! MP3s, tour dates, lyrics.', k:['music','band','basement7','basement 7','mp3','rock','grunge','garage']},
+  {t:"Dave's X-Files & Truth Corner", u:'http://truth.spiffynet.com/~xfile_dave/', d:'WAKE UP! The truth about Area 51, Y2K, the Illuminati and what THEY do not want you to know.', k:['conspiracy','ufo','aliens','area 51','y2k','truth','xfiles','x-files','illuminati','roswell']},
+  {t:'UFO Sighting Database 1999', u:'http://truth.spiffynet.com/~xfile_dave/ufo.html', d:'Documented sightings, abduction reports, and crop circle analysis.', k:['ufo','aliens','flying saucer','abduction','crop circle']},
+  {t:"DazzlePage — Tony's Pixel Art Palace", u:'http://www.spiffynet.com/dazzlepage/', d:'Awesome animated GIFs, pixel art, and HTML tips. Sign my guestbook!', k:['pixel','art','web design','html','gif','dazzle','graphics','animated']},
+  {t:'The Pixel Palace — Zelda Strategy Guide', u:'http://www.spiffynet.com/pixelpalace/zelda/', d:'Complete walkthrough for Ocarina of Time! Cheats, maps, the Triforce theory.', k:['games','zelda','nintendo','n64','ocarina','cheats','video games','walkthrough','triforce']},
+  {t:'Movie Madness — Reviews & Rumors', u:'http://www.spiffynet.com/movie-madness/', d:'The Phantom Menace, The Matrix, Fight Club — every review you need for 1999!', k:['movies','film','matrix','star wars','phantom menace','reviews','cinema','blair witch']},
+  {t:"VTEC Steve's Honda Garage", u:'http://garage.spiffynet.com/~vtec_steve/', d:'Mods, dyno sheets, and the quest for 200hp. Type R FTW!', k:['cars','honda','vtec','tuning','trucks','import','civic','jdm']},
+  {t:"Grandma Betty's Recipe Box", u:'http://kitchen.spiffynet.com/~grandma_betty/', d:'Tried-and-true family recipes. Casseroles, Jell-O salads, and cookies!', k:['recipes','cooking','food','baking','casserole','jello','cookies']},
+  {t:'Mr. Whiskers — Pet Palace', u:'http://www.spiffynet.com/petpalace/', d:'A loving tribute to the cutest cat on the Internet. Photos & cam!', k:['pets','cat','dog','animals','kitten','whiskers','petcam']},
+  {t:'Guardian Angel — A Memorial', u:'http://www.spiffynet.com/angelpage/', d:'A peaceful page of poetry, hope, and inspiration. Light a candle.', k:['angel','poetry','memorial','inspiration','candle','hope','faith']},
+  {t:'HotChat Free Web-Based Email', u:'http://hotchat.spiffynet.com/inbox/', d:'Get your own @hotchat.com address — FREE, 2MB of storage!', k:['email','hotmail','hotchat','mail','inbox','free']},
+  {t:'WebRing: The 90s Survivor Ring', u:'http://www.spiffynet.com/webring/', d:'A ring of the finest personal homepages on the net.', k:['webring','ring','homepages','directory']}
+];
+reg('http://search.spiffynet.com/?q=','SpiffyNet Search','web', (params)=>{
+  const q = (params||'').toLowerCase().trim();
+  let results = [];
+  if(q){
+    results = SEARCH_INDEX.filter(r =>
+      r.t.toLowerCase().includes(q) || r.d.toLowerCase().includes(q) ||
+      r.k.some(k=>k.includes(q)||q.includes(k))
+    );
+  }
+  const resHTML = !q
+    ? `<p style="font-family:Arial;">Enter a search term above to scour the World Wide Web!</p>`
+    : results.length
+      ? results.map((r,i)=>`<div style="margin:10px 0;font-family:Arial;">
+          <b style="font-size:14px;">${i+1}. ${link(r.u, r.t)}</b><br>
+          <span style="color:#008000;font-size:11px;">${r.u}</span><br>
+          <span>${r.d}</span></div>`).join('')
+      : `<p style="font-family:Arial;">No web pages matched <b>"${q}"</b>. Try: <i>zelda, ufo, band, recipes, cars, cat, movies, pixel art, email</i>.</p>`;
+  return `<div class="page" style="background:#fff;font-family:Arial;">
+    ${midiBar('web')}
+    <div style="background:#cc0000;padding:8px;color:#fff;">
+      <span style="font-size:28px;font-family:'Times New Roman';font-weight:bold;">SpiffySearch</span>
+      <span style="font-style:italic;">— results in 0.0${Math.floor(Math.random()*9)+1} seconds</span>
+    </div>
+    <div style="background:#eee;padding:8px;">
+      <form id="searchform" style="margin:0;">
+        <input type="text" id="searchq" size="40" value="${q.replace(/"/g,'&quot;')}" style="font-size:14px;border:2px inset #999;padding:3px;">
+        <button class="gobtn" type="submit">Search!</button>
+      </form>
+    </div>
+    <div class="wrap" style="padding:14px;">
+      ${q?`<p style="color:#666;">Found <b>${results.length}</b> result(s) for <b>"${q}"</b>:</p>`:''}
+      ${resHTML}
+      <hr class="fancy">
+      <center style="font-size:11px;">${link('http://www.spiffynet.com/','Back to SpiffyNet Home')}</center>
+    </div>
+  </div>`;
+});
+
+/* ---------- generic guestbook block ---------- */
+function guestbookBlock(id){
+  const arr = getGB(id);
+  const entries = arr.length
+    ? arr.map(e=>`<div class="gb-entry"><b>${escapeHtml(e.name)}</b> <span style="color:#888;font-size:10px;">(${e.date})</span><br>${escapeHtml(e.msg)}</div>`).join('')
+    : `<p><i>No entries yet. Be the first to sign!</i></p>`;
+  return `<div style="border:3px double #c0392b;padding:10px;background:#fff;margin:14px 0;">
+    <center><h3 style="font-family:'Comic Sans MS';color:#c0392b;">✍️ Sign My Guestbook!</h3></center>
+    <form class="gb-form" data-gb="${id}">
+      Name: <input type="text" class="gb-name" style="border:2px inset #999;"><br><br>
+      Message:<br><textarea class="gb-msg" rows="3" cols="40" style="border:2px inset #999;"></textarea><br>
+      <button class="gobtn" type="submit">Sign Guestbook!</button>
+    </form>
+    <hr>
+    <b>${arr.length} people have signed:</b>
+    ${entries}
+  </div>`;
+}
+function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+/* ---------- WEBRING block ---------- */
+const RING = [
+  'http://moonbeam.spiffynet.com/~basemen7/',
+  'http://truth.spiffynet.com/~xfile_dave/',
+  'http://www.spiffynet.com/dazzlepage/',
+  'http://garage.spiffynet.com/~vtec_steve/',
+  'http://kitchen.spiffynet.com/~grandma_betty/',
+  'http://www.spiffynet.com/petpalace/',
+  'http://www.spiffynet.com/angelpage/',
+  'http://www.spiffynet.com/movie-madness/'
+];
+function ringBlock(currentUrl){
+  const i = RING.indexOf(currentUrl);
+  const prev = RING[(i-1+RING.length)%RING.length];
+  const next = RING[(i+1)%RING.length];
+  const rnd = RING[Math.floor(Math.random()*RING.length)];
+  return `<div class="webring">
+    ╔══ THE 90s SURVIVOR WEBRING ══╗<br>
+    ${link(prev,'◄ Prev')} &nbsp;|&nbsp;
+    ${link(rnd,'★ Random')} &nbsp;|&nbsp;
+    ${link('http://www.spiffynet.com/webring/','List')} &nbsp;|&nbsp;
+    ${link(next,'Next ►')}<br>
+    <span style="font-size:10px;">Site ${i+1} of ${RING.length} in the ring</span>
+  </div>`;
+}
+
+/* ---------- WEBRING HUB ---------- */
+reg('http://www.spiffynet.com/webring/','The 90s Survivor WebRing','web', ()=>{
+  return `<div class="page" style="background:#000 url('') ;color:#0f0;font-family:'Courier New',monospace;padding:20px;">
+    ${midiBar('web')}
+    <center><h1 class="blink" style="color:#ff0;">★ THE 90s SURVIVOR WEBRING ★</h1></center>
+    <p>This webring stitches together the finest personal homepages on SpiffyNet. Follow the ring and you'll never hit a dead end!</p>
+    <ul>${RING.map(u=>`<li>${link(u, (PAGES[u]?PAGES[u].title:u))}</li>`).join('')}</ul>
+    ${ringBlock('')}
+    <center>${link('http://www.spiffynet.com/','‹ Back to SpiffyNet')}</center>
+  </div>`;
+});
+
+/* ---------- BAND SHRINE ---------- */
+reg('http://moonbeam.spiffynet.com/~basemen7/','Basement 7 :: Official Shrine','band', (p,url)=>{
+  return `<div class="page" style="background:#1a1a1a;color:#ffcc00;font-family:'Trebuchet MS',sans-serif;
+       background-image:repeating-linear-gradient(45deg,#1a1a1a 0 20px,#222 20px 40px);">
+    ${midiBar('band')}
+    <center>
+      <h1 style="font-family:Impact;font-size:48px;color:#ff0000;letter-spacing:4px;text-shadow:2px 2px 0 #000;">BASEMENT 7</h1>
+      <marquee behavior="alternate" style="color:#0f0;font-weight:bold;">🤘 THE LOUDEST BAND IN THE TRI-COUNTY AREA 🤘 NEW DEMO OUT NOW 🤘</marquee>
+    </center>
+    <div class="wrap">
+    <table class="layout" width="100%"><tr>
+      <td valign="top" width="160" style="background:#000;padding:8px;color:#0ff;">
+        <b>★ NAVIGATION ★</b>
+        <ul style="padding-left:14px;">
+          <li>Home</li>
+          <li>Tour Dates</li>
+          <li>MP3z</li>
+          <li>Lyrics</li>
+          <li>${link('http://moonbeam.spiffynet.com/~basemen7/gb.html','Guestbook')}</li>
+        </ul>
+        <div class="ucbar"><span class="blink">🚧</span> UNDER<br>CONSTRUCTION <span class="blink">🚧</span></div>
+      </td>
+      <td valign="top" style="padding:10px;">
+        <h2>Welcome to the SHRINE!</h2>
+        <p>Basement 7 is the GREATEST unsigned grunge-punk-ska band ever to play in Kevin's parents' basement. We rock SO hard.</p>
+        <h3 style="color:#ff0;">🎸 The Members:</h3>
+        <ul>
+          <li><b>Kevin</b> — Guitar/Vocals/Webmaster</li>
+          <li><b>Brad</b> — Bass (and attitude)</li>
+          <li><b>Toad</b> — Drums (real name classified)</li>
+        </ul>
+        <h3 style="color:#ff0;">📀 Download our DEMO (RealAudio):</h3>
+        <p>🎵 <u>parents_arent_home.ram</u> (2.4 MB — 56k users allow 8 min)<br>
+           🎵 <u>detention_blues.ram</u> (1.9 MB)</p>
+        <p><i>"Best heard LOUD." — Kevin</i></p>
+        <h3 style="color:#ff0;">📅 Upcoming Shows:</h3>
+        <p>• Aug 14 — Kevin's Garage (free, BYO juice box)<br>
+           • Sep 2 — Battle of the Bands @ the YMCA</p>
+      </td>
+    </tr></table>
+    <hr class="fancy">
+    <center>
+      <p>You are headbanger #</p><span class="counter">${counterFor('band', 4096)}</span>
+      <p>${btn88('#000','#f00','BASEMENT','SEVEN','')} ${btn88('#222','#0f0','NETSCAPE','NOW','')} ${btn88('#330000','#ff0','ROCK','ON!','')}</p>
+    </center>
+    ${ringBlock(url)}
+    <center style="padding:10px;">${link('http://www.spiffynet.com/','‹ SpiffyNet Home')}</center>
+    </div>
+  </div>`;
+});
+reg('http://moonbeam.spiffynet.com/~basemen7/gb.html','Basement 7 :: Guestbook','band', (p,url)=>{
+  return `<div class="page" style="background:#1a1a1a;color:#ffcc00;font-family:'Trebuchet MS';padding:10px;">
+    ${midiBar('band')}
+    <center><h1 style="color:#f00;font-family:Impact;">BASEMENT 7 GUESTBOOK</h1></center>
+    <div class="wrap" style="color:#000;">${guestbookBlock('basement7')}</div>
+    <center>${link('http://moonbeam.spiffynet.com/~basemen7/','‹ Back to the Shrine')}</center>
+  </div>`;
+});
+
+/* ---------- CONSPIRACY CORNER ---------- */
+reg('http://truth.spiffynet.com/~xfile_dave/',"Dave's Truth Corner",'conspiracy', (p,url)=>{
+  return `<div class="page" style="background:#000;color:#00ff00;font-family:'Courier New',monospace;
+       background-image:repeating-linear-gradient(0deg,#000 0 2px,#020 2px 4px);">
+    ${midiBar('conspiracy')}
+    <center>
+      <h1 class="blink" style="color:#ff0000;font-size:36px;">⚠ THE TRUTH IS OUT THERE ⚠</h1>
+      <marquee scrollamount="6" style="color:#ff0;">THEY are watching... WAKE UP SHEEPLE... TRUST NO ONE... Y2K IS REAL... THE TRUTH IS OUT THERE...</marquee>
+    </center>
+    <div class="wrap" style="padding:10px;">
+      <p style="border:1px solid #0f0;padding:8px;">Welcome, seeker. You have found <b>Dave's Truth Corner</b> — the ONLY source for what THEY don't want you to know. (Last updated 4 minutes ago. They keep taking it down.)</p>
+      <h2 style="color:#ff0;">▓ FILES ▓</h2>
+      <ul>
+        <li>📁 ${link('http://truth.spiffynet.com/~xfile_dave/ufo.html','The UFO Sighting Database')}</li>
+        <li>📁 Area 51: What I Saw (CLASSIFIED)</li>
+        <li>📁 Y2K: 173 Days Until COLLAPSE</li>
+        <li>📁 Who really controls the Internet?</li>
+      </ul>
+      <h2 style="color:#ff0;">▓ Y2K PREPAREDNESS COUNTDOWN ▓</h2>
+      <p>On 01/01/2000 every computer will FAIL. Stock up on canned beans NOW. I have 400 cans. Do you?</p>
+      <h2 style="color:#ff0;">▓ FACTS THEY HID FROM YOU ▓</h2>
+      <ol>
+        <li>The moon landing was filmed in a basement (NOT Kevin's).</li>
+        <li>Birds are government drones (this one's obvious).</li>
+        <li>Crop circles are just aliens parking.</li>
+      </ol>
+      <hr class="fancy">
+      <center>
+        <p>This page has been accessed by <span class="counter">${counterFor('truth', 31337)}</span> awakened minds</p>
+        <p>${btn88('#000','#0f0','TRUTH','SEEKER','')} ${btn88('#100','#f00','TRUST','NO ONE','')} ${btn88('#001','#ff0','Y2K','SURVIVOR','')}</p>
+      </center>
+      ${guestbookBlock('truth')}
+      ${ringBlock(url)}
+      <center>${link('http://www.spiffynet.com/','‹ Return to the Matrix (SpiffyNet)')}</center>
+    </div>
+  </div>`;
+});
+reg('http://truth.spiffynet.com/~xfile_dave/ufo.html','UFO Sighting Database','ufo', (p,url)=>{
+  const sightings=[['07/14/1999','Phoenix, AZ','Triangular lights, hovered 4 min','HIGH'],['06/02/1999','Roswell, NM','Disc, classic saucer shape','CONFIRMED'],['05/19/1999','Kevin\'s Backyard','Possibly a frisbee','LOW'],['03/30/1999','Gulf Breeze, FL','Glowing orbs, 6 witnesses','MEDIUM']];
+  return `<div class="page" style="background:#000022;color:#88ddff;font-family:'Courier New',monospace;padding:10px;">
+    ${midiBar('ufo')}
+    <center><h1 style="color:#0ff;">🛸 UFO SIGHTING DATABASE 🛸</h1>
+    <marquee style="color:#0f0;">We are NOT alone. Report your sighting today.</marquee></center>
+    <div class="wrap">
+    <table border="1" cellpadding="6" style="background:#001;color:#9ef;width:100%;border-color:#0ff;">
+      <tr style="background:#0ff;color:#000;"><th>Date</th><th>Location</th><th>Description</th><th>Credibility</th></tr>
+      ${sightings.map(s=>`<tr><td>${s[0]}</td><td>${s[1]}</td><td>${s[2]}</td><td>${s[3]}</td></tr>`).join('')}
+    </table>
+    <p>Total documented sightings: <span class="counter">${counterFor('ufo', 2024)}</span></p>
+    <center>${link('http://truth.spiffynet.com/~xfile_dave/','‹ Back to Truth Corner')}</center>
+    </div>
+  </div>`;
+});
+
+/* ---------- PIXEL ART / WEB DESIGN HOMEPAGE ---------- */
+reg('http://www.spiffynet.com/dazzlepage/',"DazzlePage — Tony's Pixel Palace",'pixel', (p,url)=>{
+  return `<div class="page" style="background:#000080;color:#fff;font-family:'Comic Sans MS',cursive;
+       background-image:repeating-conic-gradient(#000080 0% 25%, #0000a0 0% 50%);background-size:24px 24px;">
+    ${midiBar('pixel')}
+    <center>
+      <table cellpadding="10" style="background:#ff00ff;border:5px ridge #ffff00;margin:10px;">
+        <tr><td><h1 style="color:#ffff00;text-shadow:2px 2px #f00;">✨ Welcome 2 my DazzlePage ✨</h1></td></tr>
+      </table>
+      <marquee scrollamount="10" behavior="alternate"><span style="font-size:24px;">🌟⭐💫🌟⭐💫🌟⭐💫</span></marquee>
+    </center>
+    <div class="wrap" style="background:#000080cc;padding:12px;">
+      <p>Hi!! My name is Tony and this is MY pixel art homepage!! I made it ALL myself in Notepad and Paint Shop Pro!! <span class="blink" style="color:#0ff;">isnt it AWESOME???</span></p>
+      <h2 style="color:#0ff;">🎨 My Pixel Art Gallery:</h2>
+      <div style="font-size:32px;letter-spacing:2px;font-family:monospace;line-height:32px;background:#000;padding:8px;display:inline-block;">
+        🟥🟧🟨🟩🟦🟪<br>🟪🟦🟩🟨🟧🟥<br>🟥🟧🟨🟩🟦🟪
+      </div>
+      <h2 style="color:#0ff;">💡 Tony's HTML Tips:</h2>
+      <ul>
+        <li>Always use the <code>&lt;blink&gt;</code> tag — it draws the EYE!</li>
+        <li>Tiled backgrounds = professional</li>
+        <li>More colors = more better</li>
+        <li>Get a hit counter, they're free!</li>
+      </ul>
+      <h2 style="color:#0ff;">🔗 Cool Links:</h2>
+      <p>${link('http://moonbeam.spiffynet.com/~basemen7/','My friend Kevin\'s band')} •
+         ${link('http://www.spiffynet.com/pixelpalace/zelda/','Zelda guide')} •
+         ${link('http://www.spiffynet.com/petpalace/','Cute cat site')}</p>
+      <center>
+        <p>Visitors since I learned HTML last Tuesday:</p>
+        <span class="counter">${counterFor('dazzle', 256)}</span>
+        <p>${btn88('#ff00ff','#ff0','DAZZLE','PAGE!','')} ${btn88('#000','#0f0','MADE WITH','PAINT SHOP','')} ${btn88('#008','#fff','BEST IN','NETSCAPE','')}</p>
+      </center>
+      ${guestbookBlock('dazzle')}
+      ${ringBlock(url)}
+      <center>${link('http://www.spiffynet.com/','‹ SpiffyNet Home')}</center>
+    </div>
+  </div>`;
+});
+
+/* ---------- ZELDA / GAMES ---------- */
+reg('http://www.spiffynet.com/pixelpalace/zelda/','Pixel Palace :: Zelda Strategy','games', (p,url)=>{
+  return `<div class="page" style="background:#003300;color:#e0ffe0;font-family:'Times New Roman',serif;
+       background-image:repeating-linear-gradient(45deg,#003300 0 16px,#004400 16px 32px);">
+    ${midiBar('games')}
+    <center>
+      <h1 style="color:#ffd700;font-size:40px;text-shadow:2px 2px #000;">⚔ THE LEGEND OF ZELDA ⚔</h1>
+      <h3 style="color:#0f0;">Ocarina of Time — COMPLETE Strategy Guide</h3>
+      <marquee style="color:#ff0;">NEW: How to get the Biggoron Sword! • Triforce theory CONFIRMED? • Cheats inside!</marquee>
+    </center>
+    <div class="wrap" style="background:#001800cc;padding:12px;">
+      <h2 style="color:#ffd700;">📜 Walkthrough Chapters:</h2>
+      <ol>
+        <li>Inside the Deku Tree</li>
+        <li>Dodongo's Cavern</li>
+        <li>Inside Jabu-Jabu's Belly</li>
+        <li>The Forest Temple</li>
+        <li>...and 9 more dungeons!</li>
+      </ol>
+      <h2 style="color:#ffd700;">🎮 CHEATS &amp; SECRETS:</h2>
+      <ul>
+        <li>Get 100 rupees: roll into the right rocks 10× behind Link's house</li>
+        <li>The "secret" Triforce: <i>(my cousin's friend swears it's real)</i></li>
+        <li>Infinite arrows glitch (works on N64 only!)</li>
+      </ul>
+      <h2 style="color:#ffd700;">⭐ My Reviews:</h2>
+      <p>Ocarina of Time: ★★★★★ (best game EVER)<br>
+         GoldenEye 007: ★★★★★ (no Oddjob allowed)<br>
+         Pokémon Red: ★★★★☆ (gotta catch em all)</p>
+      <center>
+        <p>Players who consulted this guide:</p>
+        <span class="counter">${counterFor('zelda', 8192)}</span>
+        <p>${btn88('#003300','#ffd700','ZELDA','ROCKS','')} ${btn88('#222','#fff','N64','4-EVER','')} ${btn88('#cc0000','#fff','POKEMON','MASTER','')}</p>
+        <p>${link('http://www.spiffynet.com/movie-madness/','Check out Movie Madness →')}</p>
+      </center>
+      ${guestbookBlock('zelda')}
+      <center>${link('http://www.spiffynet.com/','‹ SpiffyNet Home')}</center>
+    </div>
+  </div>`;
+});
+
+/* ---------- MOVIE MADNESS ---------- */
+reg('http://www.spiffynet.com/movie-madness/','Movie Madness 1999','movies', (p,url)=>{
+  return `<div class="page" style="background:#101015;color:#ffeb99;font-family:Verdana,sans-serif;padding:0;">
+    ${midiBar('movies')}
+    <center style="background:#000;padding:8px;"><h1 style="color:#ffcc00;font-size:36px;letter-spacing:3px;">🎬 MOVIE MADNESS '99 🎬</h1>
+    <marquee style="color:#0f0;">A long time ago, in a webpage far, far away... • The Matrix has you... • Do you accept the Blair Witch?</marquee></center>
+    <div class="wrap" style="padding:14px;">
+      <h2 style="color:#ffcc00;">🌟 The Big Movies of 1999:</h2>
+      <div style="border:1px solid #ffcc00;padding:8px;margin:6px 0;background:#1a1a22;"><b>Star Wars: Episode I — The Phantom Menace</b> ★★★★☆<br>The hype was REAL. Pod racing rules. Jar Jar... we don't talk about Jar Jar.</div>
+      <div style="border:1px solid #ffcc00;padding:8px;margin:6px 0;background:#1a1a22;"><b>The Matrix</b> ★★★★★<br>Whoa. Bullet time changed EVERYTHING. Red pill or blue pill?</div>
+      <div style="border:1px solid #ffcc00;padding:8px;margin:6px 0;background:#1a1a22;"><b>The Blair Witch Project</b> ★★★★☆<br>Is it real?? (It's not, but my friend still won't go camping.)</div>
+      <div style="border:1px solid #ffcc00;padding:8px;margin:6px 0;background:#1a1a22;"><b>Fight Club</b> ★★★★★<br>The first rule is... well, you know.</div>
+      <center>
+        <p>Tickets sold (sort of):</p><span class="counter">${counterFor('movies', 1138)}</span>
+        <p>${btn88('#000','#ffcc00','MOVIE','MADNESS','')} ${btn88('#222','#0ff','RED','PILL','')}</p>
+      </center>
+      ${guestbookBlock('movies')}
+      ${ringBlock(url)}
+      <center>${link('http://www.spiffynet.com/','‹ SpiffyNet Home')}</center>
+    </div>
+  </div>`;
+});
+
+/* ---------- CARS ---------- */
+reg('http://garage.spiffynet.com/~vtec_steve/',"VTEC Steve's Garage",'cars', (p,url)=>{
+  return `<div class="page" style="background:#202020;color:#ddd;font-family:'Arial Black',sans-serif;
+       background-image:repeating-linear-gradient(90deg,#202020 0 30px,#252525 30px 60px);">
+    ${midiBar('cars')}
+    <center><h1 style="color:#ff3300;font-size:40px;text-shadow:2px 2px #000;">🏁 VTEC STEVE'S GARAGE 🏁</h1>
+    <marquee behavior="alternate" style="color:#0f0;">VTEC JUST KICKED IN YO!!! • Type R or go home • 200hp or bust</marquee></center>
+    <div class="wrap" style="padding:12px;font-family:Arial;">
+      <h2 style="color:#ff3300;">🚗 My Ride: '98 Civic Hatchback</h2>
+      <ul>
+        <li>Cold air intake ✅</li>
+        <li>Header + catback exhaust ✅ (loud!)</li>
+        <li>Lowering springs ✅</li>
+        <li>Giant wing ✅ (adds 50hp, trust me)</li>
+        <li>Type R badges ✅ (it's basically a Type R now)</li>
+      </ul>
+      <h2 style="color:#ff3300;">📊 Dyno Sheet:</h2>
+      <pre style="background:#000;color:#0f0;padding:8px;border:1px solid #0f0;">
+RPM    HP     TQ
+3000   88    102
+5500  142    118
+8200  178     95  <- VTEC ZONE!!!
+      </pre>
+      <h2 style="color:#ff3300;">🔗 Cruise These Sites:</h2>
+      <p>${link('http://moonbeam.spiffynet.com/~basemen7/','Drive-music: Basement 7')} •
+         ${link('http://www.spiffynet.com/movie-madness/','Movie Madness')}</p>
+      <center>
+        <p>Gearheads who visited:</p><span class="counter">${counterFor('cars', 1597)}</span>
+        <p>${btn88('#cc0000','#fff','VTEC','POWER','')} ${btn88('#000','#ff0','HONDA','LIFE','')}</p>
+      </center>
+      ${guestbookBlock('cars')}
+      ${ringBlock(url)}
+      <center>${link('http://www.spiffynet.com/','‹ SpiffyNet Home')}</center>
+    </div>
+  </div>`;
+});
+
+/* ---------- RECIPES ---------- */
+reg('http://kitchen.spiffynet.com/~grandma_betty/',"Grandma Betty's Recipe Box",'recipes', (p,url)=>{
+  return `<div class="page" style="background:#fff8e7;color:#5a3a1a;font-family:'Comic Sans MS',cursive;
+       background-image:repeating-linear-gradient(0deg,#fff8e7 0 28px,#ffeccb 28px 30px);">
+    ${midiBar('recipes')}
+    <center><h1 style="color:#c0392b;">🍪 Grandma Betty's Recipe Box 🍪</h1>
+    <marquee style="color:#27ae60;">~ Made with love (and lots of butter) ~ Bless your heart for visiting ~</marquee></center>
+    <div class="wrap" style="background:#fffdf5;border:4px dashed #c0392b;padding:14px;margin:10px;">
+      <p>Why hello there, sweetie! 🌷 Welcome to my little corner of the World Wide Web. My grandson Tony made this page for me (${link('http://www.spiffynet.com/dazzlepage/','see his page!')}). Sit a spell and try a recipe!</p>
+      <h2 style="color:#c0392b;">🥘 Famous Tuna Casserole</h2>
+      <p>1 can tuna, 1 can cream of mushroom, 2 cups egg noodles, 1 bag crushed potato chips on top. Bake at 350° til bubbly. Easy as pie!</p>
+      <h2 style="color:#c0392b;">🍮 Rainbow Jell-O Salad</h2>
+      <p>Layer 6 colors of Jell-O with Cool Whip between. Suspend canned fruit in it. A real showstopper at church potlucks!</p>
+      <h2 style="color:#c0392b;">🍪 Snickerdoodles</h2>
+      <p>Roll in cinnamon sugar. Don't overbake! Makes 3 dozen.</p>
+      <center>
+        <p>Hungry visitors:</p><span class="counter">${counterFor('recipes', 723)}</span>
+        <p>${btn88('#c0392b','#fff','GRANDMA','APPROVED','')} ${btn88('#27ae60','#fff','HOME','COOKIN','')}</p>
+      </center>
+      ${guestbookBlock('recipes')}
+      ${ringBlock(url)}
+      <center>${link('http://www.spiffynet.com/','‹ SpiffyNet Home')}</center>
+    </div>
+  </div>`;
+});
+
+/* ---------- PET PALACE ---------- */
+reg('http://www.spiffynet.com/petpalace/','Mr. Whiskers Pet Palace','pets', (p,url)=>{
+  return `<div class="page" style="background:#ffe6f2;color:#660033;font-family:'Comic Sans MS',cursive;
+       background-image:repeating-conic-gradient(#ffe6f2 0% 25%, #ffd6ec 0% 50%);background-size:30px 30px;">
+    ${midiBar('pets')}
+    <center><h1 style="color:#cc0066;">🐱 Mr. Whiskers' Pet Palace 🐱</h1>
+    <marquee behavior="alternate" style="color:#9900cc;font-size:18px;">🐾 meow meow meow 🐾 the cutest cat on the net 🐾</marquee></center>
+    <div class="wrap" style="background:#fff0f8;border:5px ridge #ff99cc;padding:14px;margin:10px;">
+      <center>
+        <div style="font-size:80px;">🐈</div>
+        <p><b>This is Mr. Whiskers!</b> He is 4 years old and loves tuna, naps, and knocking things off tables.</p>
+      </center>
+      <h2 style="color:#cc0066;">📷 The WhiskersCam!</h2>
+      <div style="border:3px inset #999;background:#000;color:#0f0;font-family:monospace;padding:20px;text-align:center;">
+        [ LIVE FEED ]<br>...zzz... 😴<br><span class="blink">● REC</span> Mr. Whiskers is currently: NAPPING<br><i>(refresh every 60 sec for new pic)</i>
+      </div>
+      <h2 style="color:#cc0066;">🏆 Awards Mr. Whiskers Has Won:</h2>
+      <p>${btn88('#cc0066','#fff','CUTEST','CAT 99','')} ${btn88('#9900cc','#ff0','COOL','SITE','')} ${btn88('#ff6600','#fff','TOP','PET','')}</p>
+      <center>
+        <p>Cat lovers since meow:</p><span class="counter">${counterFor('pets', 911)}</span>
+      </center>
+      ${guestbookBlock('pets')}
+      ${ringBlock(url)}
+      <center>${link('http://www.spiffynet.com/','‹ SpiffyNet Home')}</center>
+    </div>
+  </div>`;
+});
+
+/* ---------- ANGEL / INSPIRATION PAGE ---------- */
+reg('http://www.spiffynet.com/angelpage/','Guardian Angel','angel', (p,url)=>{
+  return `<div class="page" style="background:#0a0a40;color:#ffffe0;font-family:'Georgia',serif;
+       background-image:repeating-radial-gradient(circle at 20% 30%, #0a0a40 0 18px, #14145a 18px 20px);">
+    ${midiBar('angel')}
+    <center>
+      <h1 style="color:#fff8c0;text-shadow:0 0 10px #ffd;font-family:'Brush Script MT',cursive;font-size:46px;">Guardian Angel</h1>
+      <div style="font-size:48px;">👼 ✨ 👼</div>
+      <marquee scrollamount="3" style="color:#cfc;">~ * ~ A place of peace on the World Wide Web ~ * ~ Light a candle and stay awhile ~ * ~</marquee>
+    </center>
+    <div class="wrap" style="padding:14px;text-align:center;">
+      <p style="font-style:italic;font-size:15px;">"When you can't see the path,<br>trust that your guardian angel can."</p>
+      <div style="font-size:36px;">🕯️</div>
+      <p>A candle has been lit by <span class="counter">${counterFor('angel', 333)}</span> visitors.</p>
+      <h2 style="color:#fff8c0;">A Little Poem</h2>
+      <p style="font-style:italic;">Across the wires of the World Wide Web,<br>
+      a tiny light shines soft and true,<br>
+      and though we've never met, dear friend,<br>
+      this page was made with love for you. 💛</p>
+      <p>${btn88('#0a0a40','#ffd','ANGELS','AMONG US','')} ${btn88('#202060','#fff','PEACE','&amp; HOPE','')}</p>
+      ${guestbookBlock('angel')}
+      ${ringBlock(url)}
+      <p>${link('http://www.spiffynet.com/','‹ SpiffyNet Home')}</p>
+    </div>
+  </div>`;
+});
+
+/* ---------- HOTCHAT INBOX ---------- */
+reg('http://hotchat.spiffynet.com/inbox/','HotChat Mail - Inbox','web', ()=>{
+  const mails=[
+    {f:'SpiffyNet Team',s:'Welcome to HotChat Mail!',d:'Jul 14',body:'Welcome to your FREE 2MB email account! Tell all your friends.'},
+    {f:'kevin@basemen7',s:'CHECK OUT MY BAND SITE!!!',d:'Jul 13',body:'dude i finished the website go to ~basemen7 RIGHT NOW. we are gonna be famous.'},
+    {f:'FWD:FWD:FWD: Mom',s:'Fwd: send this to 10 people!!',d:'Jul 12',body:'If you do not forward this email to 10 people Bill Gates will NOT send you $245. FORWARD NOW!'},
+    {f:'xfile_dave',s:'WAKE UP (urgent)',d:'Jul 11',body:'check my truth corner before THEY take it down. Y2K is 173 days away. stock beans.'},
+    {f:'Grandma Betty',s:'i learned email!!',d:'Jul 10',body:'Hello sweetie this is grandma. tony showed me the computer. recipe box is up. love you. xoxo'},
+    {f:'WeBmAsTeR99',s:'U HAVE WON A FREE iMac!!!',d:'Jul 09',body:'CONGRATULATIONS you are our 1,000,000th visitor!!! CLICK HERE (definitely not a scam)'}
+  ];
+  return `<div class="page" style="background:#fff;font-family:Arial,sans-serif;">
+    ${midiBar('web')}
+    <div style="background:#cc0000;color:#fff;padding:8px;">
+      <span style="font-size:26px;font-weight:bold;font-style:italic;">HotChat Mail</span>
+      <span style="float:right;">Logged in as: <b>surfer1999@hotchat.com</b></span>
+    </div>
+    <div style="background:#eee;padding:6px;border-bottom:1px solid #999;">
+      📥 Inbox (${mails.length}) | 📤 Sent | 🗑️ Trash | ✉️ Compose | ${link('http://www.spiffynet.com/','Sign Out')}
+    </div>
+    <div class="wrap" style="padding:10px;">
+      <table border="0" cellpadding="6" width="100%" style="border-collapse:collapse;">
+        <tr style="background:#ffcc00;font-weight:bold;"><td>From</td><td>Subject</td><td>Date</td></tr>
+        ${mails.map((m,i)=>`<tr style="background:${i%2?'#f4f4f4':'#fff'};border-bottom:1px solid #ddd;cursor:pointer;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='table-row'?'none':'table-row';">
+            <td><b>${m.f}</b></td><td>📧 ${m.s}</td><td>${m.d}</td></tr>
+          <tr style="display:none;background:#fffbe6;"><td colspan="3" style="padding:10px;font-size:12px;">${escapeHtml(m.body)}</td></tr>`).join('')}
+      </table>
+      <p style="font-size:11px;color:#888;">You have used 0.3MB of your 2MB quota. <span class="blink" style="color:red;">Upgrade to HotChat GOLD!</span></p>
+      <center>${link('http://www.spiffynet.com/','‹ SpiffyNet Home')}</center>
+    </div>
+  </div>`;
+});
+
+/* ---------- 404 ---------- */
+function notFoundPage(url){
+  return `<div class="page" style="background:#fff;font-family:'Times New Roman';padding:30px;">
+    <h1 style="color:#c00;">404 Not Found</h1>
+    <p>The requested URL <code>${escapeHtml(url)}</code> was not found on this server.</p>
+    <p>The site may be <span class="blink" style="color:#c00;">🚧 UNDER CONSTRUCTION 🚧</span> or you mistyped the address.</p>
+    <hr>
+    <p>Try the ${link('http://www.spiffynet.com/','SpiffyNet Home Page')} or ${link('http://search.spiffynet.com/?q=','search the web')}.</p>
+    <p style="font-size:11px;color:#888;">SpiffyNet/1.0 Server at ${escapeHtml((url.split('/')[2]||'www.spiffynet.com'))} Port 80</p>
+  </div>`;
+}
+
+/* =========================================================
+   ROUTER  — history, address bar, loading sim
+   ========================================================= */
+const Router = (function(){
+  let history = [];
+  let pos = -1;
+  let loading = false;
+
+  function resolve(url){
+    // separate query for search
+    if(url.startsWith('http://search.spiffynet.com/')){
+      const q = decodeURIComponent((url.split('?q=')[1]||''));
+      return { page: PAGES['http://search.spiffynet.com/?q='], param:q, cleanUrl:url };
+    }
+    return { page: PAGES[url], param:null, cleanUrl:url };
+  }
+
+  function current(){ return history[pos]; }
+
+  function setStatus(t){ document.getElementById('status').textContent = t; }
+
+  function updateNavButtons(){
+    document.getElementById('tb-back').classList.toggle('disabled', pos<=0);
+    document.getElementById('tb-fwd').classList.toggle('disabled', pos>=history.length-1);
+  }
+
+  function render(url, pushHistory=true){
+    if(loading) return;
+    const {page, param, cleanUrl} = resolve(url);
+    document.getElementById('addr').value = cleanUrl;
+
+    if(pushHistory){
+      history = history.slice(0,pos+1);
+      history.push(cleanUrl);
+      pos = history.length-1;
+    }
+    updateNavButtons();
+
+    // loading simulation
+    loading = true;
+    const veil = document.getElementById('loadveil');
+    const sbar = document.getElementById('sprogbar');
+    const lock = document.getElementById('lock');
+    lock.textContent = cleanUrl.startsWith('https')?'🔒':'🔓';
+    veil.style.display='flex';
+    sbar.style.width='0%';
+    setStatus('Connecting to '+(cleanUrl.split('/')[2]||'server')+'...');
+
+    const host = cleanUrl.split('/')[2]||'server';
+    let p=0;
+    const steps = 6 + Math.floor(Math.random()*5);
+    let step=0;
+    const messages = [
+      'Connecting to '+host+'...',
+      'Host contacted. Waiting for reply...',
+      'Transferring data from '+host+'...',
+      'Reading '+host+'...',
+      'Receiving images...',
+      'Almost done...'
+    ];
+    const timer = setInterval(()=>{
+      step++;
+      p = Math.min(100, p + (15+Math.random()*22));
+      sbar.style.width = p+'%';
+      setStatus(messages[Math.min(step, messages.length-1)] + '  ('+Math.floor(p)+'%)');
+      if(p>=100 || step>steps){
+        clearInterval(timer);
+        finishRender(page, param, cleanUrl, url);
+      }
+    }, 90 + Math.random()*120);
+  }
+
+  function finishRender(page, param, cleanUrl, url){
+    const pg = document.getElementById('page');
+    const veil = document.getElementById('loadveil');
+    const sbar = document.getElementById('sprogbar');
+
+    if(page){
+      pg.innerHTML = page.render(param, cleanUrl);
+      document.title = page.title + ' - NetSurfer';
+      Audio99.playTune(page.tune);
+    } else {
+      pg.innerHTML = notFoundPage(url);
+      document.title = '404 Not Found - NetSurfer';
+      Audio99.playTune('web');
+    }
+    bindPageActions();
+    // bind 88x31 buttons that navigate
+    pg.querySelectorAll('[data-url-btn]').forEach(b=>{
+      b.style.cursor='pointer';
+      b.addEventListener('click', ()=>go(b.getAttribute('data-url-btn')));
+    });
+    document.getElementById('viewport').scrollTop = 0;
+    sbar.style.width='100%';
+    setStatus('Document: Done');
+    setTimeout(()=>{ sbar.style.width='0%'; }, 600);
+    veil.style.display='none';
+    loading=false;
+    updateNavButtons();
+  }
+
+  function go(url){ render(url, true); }
+  function back(){ if(pos>0){ pos--; render(history[pos], false); } }
+  function fwd(){ if(pos<history.length-1){ pos++; render(history[pos], false); } }
+  function reload(){ if(current()) render(current(), false); }
+  function home(){ go('http://www.spiffynet.com/'); }
+  function stop(){ /* visual only */ setStatus('Stopped.'); }
+
+  return { go, back, fwd, reload, home, stop, render, current };
+})();
+
+/* =========================================================
+   AIM / BUDDYCHAT widget
+   ========================================================= */
+const AIM = (function(){
+  let started=false;
+  const bot = [
+    "hey!!! a/s/l? :-)",
+    "have u seen kevin's band site yet?? its so cool",
+    "brb my mom needs the phone line lol",
+    "did u hear napster is gonna change EVERYTHING",
+    "warez? jk jk ;)",
+    "omg the matrix is the best movie EVER",
+    "g2g dinner, ttyl!! :-D",
+    "do u think the world will end on Y2K??",
+    "lol",
+    "*~* ~ * BRB * ~ *~*",
+    "wanna join my webring?",
+    "press any key to continue... jk theres no any key haha"
+  ];
+  function log(who, cls, txt){
+    const l = document.getElementById('aimlog');
+    const d = document.createElement('div');
+    d.innerHTML = `<span class="${cls}">${who}:</span> ${escapeHtml(txt)}`;
+    l.appendChild(d);
+    l.scrollTop = l.scrollHeight;
+  }
+  function botSay(){
+    Audio99.blip();
+    log('SmarterChild99','them', bot[Math.floor(Math.random()*bot.length)]);
+  }
+  function start(){
+    if(started) return; started=true;
+    document.getElementById('aim').style.display='block';
+    setTimeout(()=>{ log('SmarterChild99','them','*door creak* You\'ve got a buddy online!'); botSay(); }, 4000);
+    // periodic buzz
+    setInterval(()=>{ if(Math.random()<0.4) botSay(); }, 22000);
+  }
+  document.getElementById('aimsend').addEventListener('click', send);
+  document.getElementById('aimin').addEventListener('keydown', e=>{ if(e.key==='Enter') send(); });
+  document.getElementById('aimclose').addEventListener('click', ()=>{
+    const a=document.getElementById('aim');
+    a.style.display = a.style.display==='none'?'block':'none';
+  });
+  function send(){
+    const i=document.getElementById('aimin');
+    const v=i.value.trim(); if(!v) return;
+    log('surfer1999','me', v); i.value='';
+    Audio99.blip();
+    setTimeout(botSay, 900+Math.random()*1500);
+  }
+  return { start };
+})();
+
+/* =========================================================
+   BOOT SEQUENCE
+   ========================================================= */
+(function(){
+  const connectBtn = document.getElementById('connectBtn');
+  const cancelBtn = document.getElementById('cancelBtn');
+  const dialStatus = document.getElementById('dialstatus');
+  const progbar = document.getElementById('progbar');
+
+  cancelBtn.addEventListener('click', ()=>{ dialStatus.textContent='Connection cancelled. Click Connect to try again.'; });
+
+  connectBtn.addEventListener('click', ()=>{
+    connectBtn.disabled = true;
+    Audio99.ensure();
+    const dur = Audio99.playHandshake(); // returns approx duration in seconds
+
+    const lines = [
+      'Dialing 1-800-NET-1999...',
+      'Initializing modem (AT&F1)...',
+      'Negotiating carrier...',
+      '*SCREEEEE-AWWWRRR-KSHHHH* (handshake)',
+      'CONNECT 56000',
+      'Verifying username and password...',
+      'Connected at 56k. Welcome to SpiffyNet!'
+    ];
+    let i=0;
+    dialStatus.textContent='';
+    const total = Math.max(dur*1000, 6500);
+    const stepTime = total/lines.length;
+
+    const ticker = setInterval(()=>{
+      progbar.style.width = Math.min(100, ((i+1)/lines.length)*100)+'%';
+      dialStatus.textContent = lines.slice(0,i+1).join('\n');
+      const ds = document.getElementById('dialstatus');
+      ds.scrollTop = ds.scrollHeight;
+      i++;
+      if(i>=lines.length){
+        clearInterval(ticker);
+        setTimeout(enterBrowser, 800);
+      }
+    }, stepTime);
+  });
+
+  function enterBrowser(){
+    Audio99.stopMusic();
+    document.getElementById('boot').style.display='none';
+    document.getElementById('browser').style.display='flex';
+    // wire chrome
+    document.getElementById('tb-back').addEventListener('click', Router.back);
+    document.getElementById('tb-fwd').addEventListener('click', Router.fwd);
+    document.getElementById('tb-stop').addEventListener('click', Router.stop);
+    document.getElementById('tb-reload').addEventListener('click', Router.reload);
+    document.getElementById('tb-home').addEventListener('click', Router.home);
+    document.getElementById('tb-search').addEventListener('click', ()=>Router.go('http://search.spiffynet.com/?q='));
+    document.getElementById('tb-mail').addEventListener('click', ()=>Router.go('http://hotchat.spiffynet.com/inbox/'));
+    document.getElementById('tb-print').addEventListener('click', ()=>window.print());
+    document.getElementById('gobtn').addEventListener('click', ()=>Router.go(document.getElementById('addr').value.trim()));
+    document.getElementById('addr').addEventListener('keydown', e=>{ if(e.key==='Enter') Router.go(document.getElementById('addr').value.trim()); });
+
+    Router.go('http://www.spiffynet.com/');
+    AIM.start();
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1641 @@
+diff --git a/app.py b/app.py
+index c4f0b87..10108c4 100644
+--- a/app.py
++++ b/app.py
+@@ -15064,6 +15064,762 @@ def thumb_edit_inpaint():
+     return send_file(io.BytesIO(out), mimetype="image/png", download_name="inpaint.png")
+ 
+ 
++# ──────────────────────────────────────────────────────────────────────────
++# Creator Intelligence Dashboard — one admin-only page aggregating every key
++# stat. Live YouTube per-video performance + content pipeline come from
++# videos.db; business + cross-platform KPIs (MRR, Skool members, retention,
++# IG/FB reach, cohort curves) are read live from the AgentMate kpi_data.json
++# snapshot so the numbers are always most-recent. Charts are hand-rolled SVG in
++# templates/dashboard.html; this serves the aggregated payload.
++# See docs/superpowers/specs/2026-06-15-creator-dashboard-design.md
++# ──────────────────────────────────────────────────────────────────────────
++
++KPI_DATA_PATH = os.environ.get(
++    "KPI_DATA_PATH",
++    str(Path.home() / "Documents" / "Claude Folder" / "projects" / "analyticsmate" / "kpi_data.json"),
++)
++DASHBOARD_MRR_GOAL = int(os.environ.get("DASHBOARD_MRR_GOAL", "40000"))
++
++
++def _load_kpi_data():
++    """Read the AgentMate KPI snapshot live from KPI_DATA_PATH. Returns a dict
++    with months sorted oldest→newest plus latest/prev rows, or None if the file
++    is absent/unreadable — the dashboard degrades gracefully without it."""
++    try:
++        with open(KPI_DATA_PATH, "r") as f:
++            raw = json.load(f)
++    except (OSError, ValueError):
++        return None
++    months = raw.get("months", []) or []
++    # The file is stored newest-first; sort oldest→newest for charting.
++    months_sorted = sorted(months, key=lambda m: m.get("sort_key") or m.get("month") or "")
++    # "latest"/"prev" track the most recent months that actually carry business
++    # metrics (MRR), so a freshly-inserted current month holding only live
++    # platform views doesn't blank the MRR / members / retention tiles.
++    biz = [m for m in months_sorted if m.get("mrr")]
++    latest = biz[-1] if biz else (months_sorted[-1] if months_sorted else {})
++    prev = biz[-2] if len(biz) >= 2 else {}
++    return {
++        "current_subs": raw.get("current_subs"),
++        "current_total_views": raw.get("current_total_views"),
++        "pulled_at": raw.get("pulled_at"),
++        "months": months_sorted,
++        "latest": latest,
++        "prev": prev,
++        "mrr_goal": DASHBOARD_MRR_GOAL,
++    }
++
++
++def _dash_median(nums):
++    s = sorted(n for n in nums if n is not None)
++    if not s:
++        return 0
++    mid = len(s) // 2
++    return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2.0
++
++
++@app.route("/dashboard")
++def creator_dashboard_page():
++    """Admin-only Creator Intelligence Dashboard (mirrors /factory gating)."""
++    email = (session.get("impersonator_email") or session.get("email") or "").lower()
++    if not _is_admin_email(email):
++        return redirect("/")
++    return render_template("dashboard.html")
++
++
++MY_CHANNEL_ID = os.environ.get("MY_CHANNEL_ID", "UCn2RJFAA1ndipnVJsYAwWOw")
++DASH_CHECK_WINDOW_DAYS = 90
++
++
++def _dash_videos(conn, uid):
++    """Full per-video list (freshest counts) from my_channel_videos, plus the
++    channel view-count median used for outlier scoring."""
++    rows = conn.execute(
++        "SELECT video_id, title, view_count, like_count, comment_count, "
++        "published_at, duration_seconds, thumbnail_url FROM my_channel_videos WHERE user_id = ?",
++        (uid,),
++    ).fetchall()
++    median = _dash_median([r["view_count"] or 0 for r in rows])
++    out = []
++    for r in rows:
++        vc = r["view_count"] or 0
++        out.append({
++            "id": r["video_id"],
++            "title": r["title"] or "",
++            "views": vc,
++            "likes": r["like_count"] or 0,
++            "comments": r["comment_count"] or 0,
++            "published": (r["published_at"] or "")[:10],
++            "duration": r["duration_seconds"] or 0,
++            "thumb": r["thumbnail_url"] or "",
++            "outlier": round(vc / median, 2) if median else 0,
++        })
++    out.sort(key=lambda v: v["views"], reverse=True)
++    return out, median
++
++
++def _dash_monthly(videos):
++    """Videos + views per publish-month, gap-filled oldest→newest (honest zeros)."""
++    agg = {}
++    for v in videos:
++        ym = v["published"][:7]
++        if len(ym) != 7:
++            continue
++        a = agg.setdefault(ym, {"videos": 0, "views": 0})
++        a["videos"] += 1
++        a["views"] += v["views"]
++    if not agg:
++        return []
++
++    def _idx(m):
++        y, mo = m.split("-")
++        return int(y) * 12 + int(mo) - 1
++
++    keys = sorted(agg)
++    out, i, last = [], _idx(keys[0]), _idx(keys[-1])
++    while i <= last:
++        ym = f"{i // 12:04d}-{i % 12 + 1:02d}"
++        a = agg.get(ym, {"videos": 0, "views": 0})
++        out.append({"month": ym, "videos": a["videos"], "views": a["views"]})
++        i += 1
++    return out
++
++
++def _dash_archive(conn, uid):
++    """Results-checker archive. Lazily-created table; persists across container
++    rebuilds via the bind-mounted videos.db."""
++    conn.execute(
++        "CREATE TABLE IF NOT EXISTS dash_check_archive ("
++        "user_id INTEGER NOT NULL, video_id TEXT NOT NULL, payload TEXT NOT NULL, "
++        "checked_at INTEGER NOT NULL, PRIMARY KEY (user_id, video_id))"
++    )
++    rows = conn.execute(
++        "SELECT video_id, payload FROM dash_check_archive WHERE user_id = ?", (uid,)
++    ).fetchall()
++    out = {}
++    for r in rows:
++        try:
++            out[r["video_id"]] = json.loads(r["payload"])
++        except (ValueError, TypeError):
++            pass
++    return out
++
++
++def _meta_pull_ig_fb():
++    """Live Instagram + Facebook current-month views via the Meta Graph API.
++    Returns (ig_views, fb_views); either is None when unavailable. Ported from
++    the analyticsmate kpi_refresh.py."""
++    import ssl
++    from urllib.request import urlopen, Request
++    token = os.environ.get("META_ACCESS_TOKEN", "")
++    if not token:
++        return None, None
++    ig_id = os.environ.get("META_IG_ACCOUNT_ID", "PLACEHOLDER_IG_ACCOUNT_ID")
++    page_id = os.environ.get("META_FB_PAGE_ID", "1512666705493261")
++    ctx = ssl.create_default_context()
++    now = datetime.now(timezone.utc)
++    since = now.replace(day=1).strftime("%Y-%m-%d")
++    until = now.strftime("%Y-%m-%d")
++    ig = fb = None
++
++    def _err(e):
++        try:
++            return e.read().decode("utf-8", "ignore")[:240]
++        except Exception:
++            return str(e)
++
++    try:
++        # IG account-level "views" (Meta v25 uses metric_type=total_value).
++        url = (f"https://graph.facebook.com/v25.0/{ig_id}/insights"
++               f"?metric=views&metric_type=total_value&period=day"
++               f"&since={since}&until={until}&access_token={token}")
++        resp = json.loads(urlopen(Request(url), context=ctx, timeout=30).read())
++        data = resp.get("data", [])
++        if data:
++            tv = data[0].get("total_value")
++            if tv is not None:
++                ig = tv.get("value", 0)
++            else:
++                ig = sum(v.get("value", 0) for v in data[0].get("values", []))
++    except Exception as e:
++        print(f"[dash-refresh] IG pull failed: {_err(e)}", flush=True)
++    try:
++        purl = f"https://graph.facebook.com/v25.0/{page_id}?fields=access_token&access_token={token}"
++        ptok = json.loads(urlopen(Request(purl), context=ctx, timeout=15).read()).get("access_token", "")
++        if ptok:
++            url = (f"https://graph.facebook.com/v25.0/{page_id}/video_reels"
++                   f"?fields=id,created_time,views&limit=100&access_token={ptok}")
++            resp = json.loads(urlopen(Request(url), context=ctx, timeout=30).read())
++            cm = now.strftime("%Y-%m")
++            fb = sum(r.get("views", 0) for r in resp.get("data", []) if r.get("created_time", "")[:7] == cm)
++    except Exception as e:
++        print(f"[dash-refresh] FB pull failed: {_err(e)}", flush=True)
++    return ig, fb
++
++
++def _yt_channel_stats():
++    """Live (subscribers, total_views) for the channel via the YouTube Data API
++    key. Returns (None, None) when no key or on error."""
++    from urllib.request import urlopen, Request
++    key = os.environ.get("YOUTUBE_API_KEY", "")
++    if not key:
++        return None, None
++    try:
++        url = (f"https://www.googleapis.com/youtube/v3/channels"
++               f"?part=statistics&id={MY_CHANNEL_ID}&key={key}")
++        resp = json.loads(urlopen(Request(url), timeout=20).read())
++        st = resp["items"][0]["statistics"]
++        return int(st["subscriberCount"]), int(st["viewCount"])
++    except Exception as e:
++        print(f"[dash-refresh] YT channel stats failed: {e}", flush=True)
++        return None, None
++
++
++# ── External-source cache ─────────────────────────────────────────────────
++# Wraps every outbound API pull (YouTube Analytics, GitHub, Airtable) so the
++# 45s auto-poll on /api/dashboard doesn't hammer external services. Each worker
++# keeps its own cache; Refresh forces a fresh pull (force=True).
++_DASH_CACHE = {}  # key -> (expires_epoch, value)
++
++
++def _dash_cached(key, ttl, producer, force=False):
++    now = time.time()
++    if not force:
++        hit = _DASH_CACHE.get(key)
++        if hit and hit[0] > now:
++            return hit[1]
++    try:
++        val = producer()
++    except Exception as e:
++        print(f"[dash-cache] {key} failed: {e}", flush=True)
++        hit = _DASH_CACHE.get(key)
++        return hit[1] if hit else None
++    _DASH_CACHE[key] = (now + ttl, val)
++    return val
++
++
++# ── YouTube Analytics (real monthly views + 7/30/90d windows) ──────────────
++YT_OAUTH_PICKLE = os.environ.get(
++    "YT_OAUTH_PICKLE",
++    str(Path.home() / "Documents" / "Claude Folder" / "youtube_token.pickle"),
++)
++
++
++def _yt_analytics_client():
++    """Build a YouTube Analytics v2 client from the OAuth pickle, refreshing the
++    token if expired. Returns None when the libs or pickle are unavailable so the
++    dashboard degrades gracefully."""
++    try:
++        import pickle as _pk
++        from googleapiclient.discovery import build
++        from google.auth.transport.requests import Request as _GReq
++        with open(YT_OAUTH_PICKLE, "rb") as f:
++            creds = _pk.load(f)
++        if getattr(creds, "expired", False) and getattr(creds, "refresh_token", None):
++            creds.refresh(_GReq())
++        return build("youtubeAnalytics", "v2", credentials=creds)
++    except Exception as e:
++        print(f"[dash] YT Analytics unavailable: {e}", flush=True)
++        return None
++
++
++def _yt_monthly_views():
++    """Real monthly channel views (all traffic) via the Analytics API. Pulls
++    daily and buckets into months — the month dimension rejects non-aligned end
++    dates, and daily includes the partial current month. {'YYYY-MM': views}."""
++    yta = _yt_analytics_client()
++    if yta is None:
++        return {}
++    from datetime import date
++    try:
++        resp = yta.reports().query(
++            ids="channel==MINE", startDate="2022-01-01", endDate=date.today().isoformat(),
++            metrics="views", dimensions="day", sort="day",
++        ).execute()
++    except Exception as e:
++        print(f"[dash] YT monthly query failed: {e}", flush=True)
++        return {}
++    out = {}
++    for row in resp.get("rows", []):
++        ym = row[0][:7]
++        out[ym] = out.get(ym, 0) + int(row[1])
++    return out
++
++
++def _yt_windows():
++    """Daily channel views (last ~95d) for the windowed overview chart + the
++    YouTube-Studio-style 28-day KPI cards (views, watch hours, net subs, likes)
++    with a previous-period baseline for 'vs usual' deltas. None when unavailable.
++    (estimatedRevenue needs the monetary OAuth scope the pickle lacks → omitted.)"""
++    yta = _yt_analytics_client()
++    if yta is None:
++        return None
++    from datetime import date, timedelta
++    end = date.today()
++    try:
++        resp = yta.reports().query(
++            ids="channel==MINE", startDate=(end - timedelta(days=95)).isoformat(),
++            endDate=end.isoformat(), metrics="views", dimensions="day", sort="day",
++        ).execute()
++    except Exception as e:
++        print(f"[dash] YT window query failed: {e}", flush=True)
++        return None
++    series = [{"day": r[0], "views": int(r[1])} for r in resp.get("rows", [])]
++    _tail = lambda n: sum(d["views"] for d in series[-n:])
++
++    def _agg(s, e):
++        try:
++            r = yta.reports().query(
++                ids="channel==MINE", startDate=s.isoformat(), endDate=e.isoformat(),
++                metrics="views,estimatedMinutesWatched,subscribersGained,subscribersLost,likes",
++            ).execute()
++            row = (r.get("rows") or [[0, 0, 0, 0, 0]])[0]
++            return {"views": int(row[0]), "watch_hours": round(int(row[1]) / 60),
++                    "subs_net": int(row[2]) - int(row[3]), "likes": int(row[4])}
++        except Exception as ex:
++            print(f"[dash] YT studio agg failed: {ex}", flush=True)
++            return None
++
++    cur = _agg(end - timedelta(days=28), end)
++    prev = _agg(end - timedelta(days=56), end - timedelta(days=28))
++    return {"d7": _tail(7), "d28": _tail(28), "d30": _tail(30), "d90": _tail(90),
++            "series": series[-90:], "studio": {"cur": cur, "prev": prev}}
++
++
++# ── GitHub stars (per repo) ────────────────────────────────────────────────
++def _github_stars():
++    """Followers + per-repo stars for the configured GitHub user. Uses
++    GITHUB_TOKEN (private repos + 5000/hr) when set, else unauth public."""
++    from urllib.request import urlopen, Request
++    user = os.environ.get("GITHUB_USER", "AndyHafell")
++    tok = os.environ.get("GITHUB_TOKEN", "")
++    hdr = {"User-Agent": "cg-dashboard", "Accept": "application/vnd.github+json"}
++    if tok:
++        hdr["Authorization"] = f"Bearer {tok}"
++
++    def _get(url):
++        return json.loads(urlopen(Request(url, headers=hdr), timeout=20).read())
++
++    try:
++        u = _get(f"https://api.github.com/users/{user}")
++    except Exception as e:
++        print(f"[dash] github user failed: {e}", flush=True)
++        return None
++    repos, page = [], 1
++    while page <= 5:
++        try:
++            url = (f"https://api.github.com/user/repos?per_page=100&page={page}&affiliation=owner&sort=updated"
++                   if tok else
++                   f"https://api.github.com/users/{user}/repos?per_page=100&page={page}&sort=updated")
++            batch = _get(url)
++        except Exception as e:
++            print(f"[dash] github repos failed: {e}", flush=True)
++            break
++        if not batch:
++            break
++        for r in batch:
++            repos.append({"name": r.get("name"), "stars": r.get("stargazers_count", 0)})
++        if len(batch) < 100:
++            break
++        page += 1
++    starred = sorted((r for r in repos if r["stars"] > 0), key=lambda r: r["stars"], reverse=True)
++    return {
++        "followers": u.get("followers", 0),
++        "total_stars": sum(r["stars"] for r in repos),
++        "repo_count": len(repos),
++        "repos": starred[:12],
++    }
++
++
++# ── Skool members (live from the Airtable auto-tracker) ─────────────────────
++def _airtable_members():
++    """Live Skool roster from the Mate OS auto-tracker, piped straight into the
++    dashboard. Dedupes by lowercased email (newest by JoinedDate), then returns
++    counts (total active / paying / free / cancelled / legacy), new-joiner counts
++    (7d/30d), the '#1 focus' breakdown (Answer1), and the full roster for the
++    Members tab. The Zap is create-only so this is best-effort — labelled
++    'from auto-tracker', not a verified live Skool count."""
++    from urllib.request import urlopen, Request
++    from datetime import date, timedelta
++    tok = os.environ.get("AIRTABLE_PERSONAL_ACCESS_TOKEN") or os.environ.get("AIRTABLE_TOKEN", "")
++    if not tok:
++        return None
++    base = os.environ.get("AIRTABLE_MEMBER_BASE", "PLACEHOLDER_AIRTABLE_BASE")
++    table = os.environ.get("AIRTABLE_MEMBER_TABLE", "PLACEHOLDER_AIRTABLE_TABLE")
++    hdr = {"Authorization": f"Bearer {tok}", "User-Agent": "cg-dashboard"}
++    rows, offset = [], None
++    try:
++        while True:
++            url = (f"https://api.airtable.com/v0/{base}/{table}?pageSize=100"
++                   "&fields%5B%5D=Name&fields%5B%5D=Status&fields%5B%5D=Answer1"
++                   "&fields%5B%5D=Email&fields%5B%5D=JoinedDate")
++            if offset:
++                url += f"&offset={offset}"
++            resp = json.loads(urlopen(Request(url, headers=hdr), timeout=25).read())
++            rows.extend(resp.get("records", []))
++            offset = resp.get("offset")
++            if not offset:
++                break
++    except Exception as e:
++        print(f"[dash] airtable members failed: {e}", flush=True)
++        return None
++    by_email = {}
++    for r in rows:
++        f = r.get("fields", {})
++        key = (f.get("Email") or "").strip().lower() or r.get("id")
++        joined = f.get("JoinedDate") or ""
++        prev = by_email.get(key)
++        if prev is None or joined >= (prev.get("joined") or ""):
++            by_email[key] = {
++                "name": f.get("Name") or "",
++                "status": f.get("Status") or "",
++                "focus": f.get("Answer1") or "",
++                "email": f.get("Email") or "",
++                "joined": joined,
++            }
++    members = list(by_email.values())
++    members.sort(key=lambda m: m["joined"], reverse=True)
++    statuses = [m["status"] for m in members]
++    cut7 = (date.today() - timedelta(days=7)).isoformat()
++    cut30 = (date.today() - timedelta(days=30)).isoformat()
++    focus = {}
++    for m in members:
++        if m["status"] != "Cancelled" and m["focus"]:
++            focus[m["focus"]] = focus.get(m["focus"], 0) + 1
++    return {
++        "total_active": sum(1 for s in statuses if s != "Cancelled"),
++        "paying": sum(1 for s in statuses if s == "Paid"),
++        "free": sum(1 for s in statuses if s == "Free"),
++        "legacy": sum(1 for s in statuses if s == "Legacy"),
++        "cancelled": sum(1 for s in statuses if s == "Cancelled"),
++        "new_7d": sum(1 for m in members if (m["joined"] or "")[:10] >= cut7),
++        "new_30d": sum(1 for m in members if (m["joined"] or "")[:10] >= cut30),
++        "focus": sorted(focus.items(), key=lambda kv: kv[1], reverse=True),
++        "roster": members[:500],
++        "pulled_at": datetime.now(timezone.utc).isoformat(),
++    }
++
++
++# ── Website visitors (Cloudflare → persisted local history) ────────────────
++def _site_visits_table(conn):
++    conn.execute(
++        "CREATE TABLE IF NOT EXISTS site_visits ("
++        "domain TEXT NOT NULL, day TEXT NOT NULL, uniques INTEGER, "
++        "pageviews INTEGER, PRIMARY KEY(domain, day))"
++    )
++
++
++def _cf_sites():
++    """CF_SITES env = JSON {domain: {type:'zone'|'rum', tag, account}}."""
++    try:
++        return json.loads(os.environ.get("CF_SITES", "") or "{}")
++    except ValueError:
++        return {}
++
++
++def _cf_query(cfg, start, end, hdr):
++    """Daily uniques for one Cloudflare site → [(day, uniques, pageviews)].
++    Zone analytics for proxied domains; RUM (Web Analytics) for Pages sites."""
++    from urllib.request import urlopen, Request
++    if cfg.get("type") == "rum":
++        q = ("query($acc:String!,$start:Date!,$end:Date!,$site:String!){viewer{accounts(filter:{accountTag:$acc}){"
++             "rumPageloadEventsAdaptiveGroups(limit:1000,filter:{date_geq:$start,date_leq:$end,siteTag:$site}){"
++             "dimensions{date} sum{visits} count}}}}")
++        variables = {"acc": cfg.get("account"), "start": start.isoformat(),
++                     "end": end.isoformat(), "site": cfg.get("tag")}
++    else:
++        q = ("query($tag:String!,$start:String!,$end:String!){viewer{zones(filter:{zoneTag:$tag}){"
++             "httpRequests1dGroups(limit:90,filter:{date_geq:$start,date_leq:$end}){"
++             "dimensions{date} uniq{uniques} sum{pageViews}}}}}")
++        variables = {"tag": cfg.get("tag"), "start": start.isoformat(), "end": end.isoformat()}
++    body = json.dumps({"query": q, "variables": variables}).encode()
++    resp = json.loads(urlopen(
++        Request("https://api.cloudflare.com/client/v4/graphql", data=body, headers=hdr), timeout=25).read())
++    out = []
++    try:
++        if cfg.get("type") == "rum":
++            for g in resp["data"]["viewer"]["accounts"][0]["rumPageloadEventsAdaptiveGroups"]:
++                out.append((g["dimensions"]["date"], g["sum"].get("visits", 0), g.get("count", 0)))
++        else:
++            for g in resp["data"]["viewer"]["zones"][0]["httpRequests1dGroups"]:
++                out.append((g["dimensions"]["date"], g["uniq"]["uniques"], g["sum"]["pageViews"]))
++    except Exception as e:
++        print(f"[dash] CF parse failed: {e}", flush=True)
++    return out
++
++
++def _cf_visitor_sync():
++    """Pull last ~30d daily uniques per configured CF site and upsert into
++    site_visits (accumulates history past CF's ~30-day retention). Best-effort;
++    needs CF_API_TOKEN + CF_SITES. Returns True if any site synced."""
++    token = os.environ.get("CF_API_TOKEN", "")
++    sites = _cf_sites()
++    if not token or not sites:
++        return False
++    from datetime import date, timedelta
++    end = date.today()
++    start = end - timedelta(days=30)
++    hdr = {"Authorization": f"Bearer {token}", "Content-Type": "application/json",
++           "User-Agent": "cg-dashboard"}
++    synced = False
++    conn = get_db()
++    try:
++        _site_visits_table(conn)
++        for domain, cfg in sites.items():
++            try:
++                for day, uniq, pv in _cf_query(cfg, start, end, hdr):
++                    conn.execute(
++                        "INSERT INTO site_visits (domain, day, uniques, pageviews) VALUES (?,?,?,?) "
++                        "ON CONFLICT(domain, day) DO UPDATE SET uniques=excluded.uniques, "
++                        "pageviews=excluded.pageviews",
++                        (domain, day, uniq, pv))
++                    synced = True
++            except Exception as e:
++                print(f"[dash] CF sync {domain} failed: {e}", flush=True)
++        conn.commit()
++    finally:
++        conn.close()
++    return synced
++
++
++def _site_visitors():
++    """Per-site 30/90-day + all-time uniques AND a daily series (for the website
++    -visitors overview chart), from site_visits. CreatorGrowth falls back to the
++    built-in visitor_pings counter with a daily new-visitor series."""
++    from datetime import timedelta
++    sites = {}
++    conn = get_db()
++    try:
++        _site_visits_table(conn)
++        today = datetime.now(timezone.utc).date()
++        d30, d90 = (today - timedelta(days=30)).isoformat(), (today - timedelta(days=90)).isoformat()
++        agg, series = {}, {}
++        for r in conn.execute("SELECT domain, day, uniques FROM site_visits ORDER BY day").fetchall():
++            a = agg.setdefault(r["domain"], {"d30": 0, "d90": 0, "all": 0})
++            u = r["uniques"] or 0
++            a["all"] += u
++            if r["day"] >= d90:
++                a["d90"] += u
++            if r["day"] >= d30:
++                a["d30"] += u
++            series.setdefault(r["domain"], []).append({"day": r["day"], "uniques": u})
++        for dom, a in agg.items():
++            sites[dom] = {"d30": a["d30"], "d90": a["d90"], "all_time": a["all"],
++                          "source": "cloudflare", "series": series.get(dom, [])}
++        if "creatorgrowth.com" not in sites:
++            try:
++                now = int(time.time())
++                allc = conn.execute("SELECT COUNT(*) FROM visitor_pings").fetchone()[0]
++                c30 = conn.execute("SELECT COUNT(*) FROM visitor_pings WHERE last_seen>=?", (now - 30 * 86400,)).fetchone()[0]
++                c90 = conn.execute("SELECT COUNT(*) FROM visitor_pings WHERE last_seen>=?", (now - 90 * 86400,)).fetchone()[0]
++                cg_series = [{"day": row["d"], "uniques": row["c"]}
++                             for row in conn.execute(
++                                 "SELECT date(first_seen,'unixepoch') d, COUNT(*) c FROM visitor_pings "
++                                 "GROUP BY d ORDER BY d").fetchall() if row["d"]]
++                sites["creatorgrowth.com"] = {"d30": c30, "d90": c90, "all_time": allc,
++                                              "source": "visitor_pings", "series": cg_series}
++            except Exception:
++                pass
++    finally:
++        conn.close()
++    return sites
++
++
++def _dashboard_payload(uid):
++    conn = get_db()
++    try:
++        videos, median_views = _dash_videos(conn, uid)
++        archive = _dash_archive(conn, uid)
++        pipe_rows = conn.execute(
++            "SELECT status, COUNT(*) AS n FROM videos WHERE user_id = ? GROUP BY status",
++            (uid,),
++        ).fetchall()
++        pipeline = {r["status"]: r["n"] for r in pipe_rows}
++        this_month = datetime.now(timezone.utc).strftime("%Y-%m")
++        shipped_this_month = conn.execute(
++            "SELECT COUNT(*) AS n FROM videos WHERE user_id = ? AND status = 'published' "
++            "AND substr(published_at, 1, 7) = ?",
++            (uid, this_month),
++        ).fetchone()["n"]
++    finally:
++        conn.close()
++
++    total_views = sum(v["views"] for v in videos)
++    total_likes = sum(v["likes"] for v in videos)
++    total_comments = sum(v["comments"] for v in videos)
++    n_videos = len(videos)
++    uploads_this_month = sum(1 for v in videos if v["published"][:7] == this_month)
++    kpi = _load_kpi_data()
++    months = (kpi or {}).get("months") or []
++
++    def _recent_metric(key):
++        for m in reversed(months):  # newest-first
++            v = m.get(key)
++            if v is not None:
++                return v
++        return None
++
++    ig_views = _recent_metric("ig_views")
++    fb_views = _recent_metric("fb_views")
++    members = _dash_cached("members", 1800, _airtable_members)
++    github = _dash_cached("github", 1800, _github_stars)
++    monthly_real = _dash_cached("yt_monthly", 1800, _yt_monthly_views)
++    windows = _dash_cached("yt_windows", 1800, _yt_windows)
++    _dash_cached("cf_sync", 1800, _cf_visitor_sync)  # keep CF visitor history fresh (<=30min)
++    site_visitors = _site_visitors()
++    return {
++        "generated_at": datetime.now(timezone.utc).isoformat(),
++        "synced_at": (kpi or {}).get("pulled_at"),
++        "channel": {
++            "subscribers": (kpi or {}).get("current_subs"),
++            "total_views": total_views,
++            "videos": n_videos,
++            "avg_views": round(total_views / n_videos) if n_videos else 0,
++            "total_likes": total_likes,
++            "total_comments": total_comments,
++            "median_views": median_views,
++        },
++        "monthly": _dash_monthly(videos),
++        "videos": videos,
++        "archive": archive,
++        "pipeline": pipeline,
++        "shipped_this_month": shipped_this_month,
++        "uploads_this_month": uploads_this_month,
++        "this_month": this_month,
++        "check_window_days": DASH_CHECK_WINDOW_DAYS,
++        "platforms": {
++            "youtube": {"connected": True, "views": total_views},
++            "instagram": {"connected": ig_views is not None, "views": ig_views},
++            "facebook": {"connected": fb_views is not None, "views": fb_views},
++        },
++        "refreshable": bool(os.environ.get("META_ACCESS_TOKEN") or os.environ.get("YOUTUBE_API_KEY")),
++        "members": members,
++        "github": github,
++        "monthly_real": (monthly_real or None),
++        "windows": windows,
++        "site_visitors": site_visitors,
++        "kpi": kpi,
++    }
++
++
++@app.route("/api/dashboard", methods=["GET"])
++def creator_dashboard_data():
++    """Aggregate every key stat for the signed-in admin's workspace."""
++    _, err = _require_admin()
++    if err:
++        return err
++    return jsonify(_dashboard_payload(current_user_id()))
++
++
++@app.route("/api/dashboard/check", methods=["POST"])
++def creator_dashboard_check():
++    """Results checker: read a video's real counts, score it against the channel
++    median, archive the result."""
++    _, err = _require_admin()
++    if err:
++        return err
++    uid = current_user_id()
++    vid = (request.get_json(silent=True) or {}).get("video_id")
++    if not vid:
++        return jsonify({"error": "video_id required"}), 400
++    conn = get_db()
++    try:
++        videos, median = _dash_videos(conn, uid)
++        v = next((x for x in videos if x["id"] == vid), None)
++        if v is None:
++            return jsonify({"error": "video not found"}), 404
++        rec = {
++            "id": v["id"], "title": v["title"], "published": v["published"],
++            "views": v["views"], "likes": v["likes"], "comments": v["comments"],
++            "median_at_check": median,
++            "outlier": round(v["views"] / median, 2) if median else 0,
++            "checked_at": int(time.time()), "status": "done",
++        }
++        _dash_archive(conn, uid)  # ensure table exists
++        conn.execute(
++            "INSERT INTO dash_check_archive (user_id, video_id, payload, checked_at) "
++            "VALUES (?, ?, ?, ?) ON CONFLICT(user_id, video_id) DO UPDATE SET "
++            "payload = excluded.payload, checked_at = excluded.checked_at",
++            (uid, vid, json.dumps(rec), rec["checked_at"]),
++        )
++        conn.commit()
++    finally:
++        conn.close()
++    return jsonify(rec)
++
++
++@app.route("/api/dashboard/refresh", methods=["POST"])
++def creator_dashboard_refresh():
++    """Live refresh: pull YouTube channel stats + Instagram/Facebook current-month
++    views into kpi_data.json, and kick a background YouTube video re-sync so new
++    uploads appear. Admin only."""
++    _, err = _require_admin()
++    if err:
++        return err
++    result = {"youtube": False, "instagram": False, "facebook": False, "video_sync": False}
++
++    subs, total_views = _yt_channel_stats()
++    ig, fb = _meta_pull_ig_fb()
++
++    # Merge into kpi_data.json (preserve everything else; update current month).
++    try:
++        with open(KPI_DATA_PATH, "r") as f:
++            kpi_raw = json.load(f)
++    except (OSError, ValueError):
++        kpi_raw = {"months": []}
++    cm = datetime.now(timezone.utc).strftime("%Y-%m")
++    months = kpi_raw.setdefault("months", [])
++    row = next((m for m in months if (m.get("sort_key") or "") == cm), None)
++    if row is None:
++        row = {"month": cm, "sort_key": cm}
++        months.insert(0, row)
++    if ig is not None:
++        row["ig_views"] = ig
++        result["instagram"] = True
++    if fb is not None:
++        row["fb_views"] = fb
++        result["facebook"] = True
++    if subs is not None:
++        kpi_raw["current_subs"] = subs
++        kpi_raw["current_total_views"] = total_views
++        result["youtube"] = True
++    kpi_raw["pulled_at"] = datetime.now(timezone.utc).isoformat()
++    try:
++        with open(KPI_DATA_PATH, "w") as f:
++            json.dump(kpi_raw, f, indent=2)
++    except OSError as e:
++        print(f"[dash-refresh] could not write kpi_data.json: {e}", flush=True)
++
++    # Best-effort background YouTube video re-sync (new uploads → my_channel_videos).
++    if os.environ.get("YOUTUBE_API_KEY"):
++        try:
++            script = str(Path(__file__).resolve().parent / "sync_my_channel.py")
++            if os.path.exists(script):
++                subprocess.Popen(
++                    [sys.executable, script],
++                    cwd=str(Path(__file__).resolve().parent),
++                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
++                    env={**os.environ, "VIDEOS_DB_PATH": str(DB_PATH)},
++                )
++                result["video_sync"] = True
++        except Exception as e:
++            print(f"[dash-refresh] video sync spawn failed: {e}", flush=True)
++
++    # Force-refresh the cached external sources (bypass the per-worker cache) and
++    # persist a fresh slice of Cloudflare visitor history.
++    _dash_cached("members", 1800, _airtable_members, force=True)
++    _dash_cached("github", 1800, _github_stars, force=True)
++    _dash_cached("yt_monthly", 1800, _yt_monthly_views, force=True)
++    _dash_cached("yt_windows", 1800, _yt_windows, force=True)
++    result["cloudflare"] = _cf_visitor_sync()
++    result["youtube_analytics"] = bool(_DASH_CACHE.get("yt_monthly", (0, None))[1])
++    result["github"] = bool(_DASH_CACHE.get("github", (0, None))[1])
++    result["airtable"] = bool(_DASH_CACHE.get("members", (0, None))[1])
++
++    result["data"] = _dashboard_payload(current_user_id())
++    return jsonify(result)
++
++
+ if __name__ == "__main__":
+     import webbrowser, threading
+     threading.Timer(1.0, lambda: webbrowser.open("http://127.0.0.1:5050")).start()
+diff --git a/templates/dashboard.html b/templates/dashboard.html
+new file mode 100644
+index 0000000..8747edb
+--- /dev/null
++++ b/templates/dashboard.html
+@@ -0,0 +1,868 @@
++<!doctype html>
++<html lang="en">
++<head>
++<meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1">
++<title>Creator Intelligence · CreatorGrowth</title>
++<link rel="icon" href="/static/favicon.png">
++<style>
++:root{
++  --bg:#07070b; --surface:rgba(255,255,255,.027); --surface-2:rgba(255,255,255,.05);
++  --border:rgba(255,255,255,.075); --border-strong:rgba(255,255,255,.14);
++  --text:#f2f3f7; --muted:#8b8e9e; --faint:#5b5e6e;
++  --red:#ff4757; --red-soft:rgba(255,71,87,.14); --violet:#a78bfa; --blue:#4f8df9;
++  --cyan:#2dd4bf; --gold:#fbbf24; --green:#34d399; --radius:16px;
++  --font:-apple-system,BlinkMacSystemFont,"SF Pro Display","Inter","Segoe UI",sans-serif;
++}
++*{box-sizing:border-box;margin:0;padding:0}
++html{scroll-behavior:smooth}
++body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;overflow-x:hidden}
++.bg-glow{position:fixed;inset:0;z-index:-1;background:
++  radial-gradient(900px 480px at 12% -8%,rgba(255,71,87,.085),transparent 64%),
++  radial-gradient(820px 540px at 96% 12%,rgba(167,139,250,.065),transparent 60%),
++  radial-gradient(700px 600px at 50% 110%,rgba(45,212,191,.05),transparent 60%)}
++main{max-width:1180px;margin:0 auto;padding:0 28px 64px;display:flex;flex-direction:column;gap:50px}
++.num{font-variant-numeric:tabular-nums}
++
++/* topbar */
++.topbar{max-width:1180px;margin:0 auto;padding:24px 28px 32px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
++.brand{display:flex;align-items:center;gap:14px}
++.logo{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;font-weight:800;font-size:19px;color:#fff;background:linear-gradient(135deg,#ff4757,#b3265f);box-shadow:0 4px 24px rgba(255,71,87,.35)}
++.brand h1{font-size:19px;font-weight:700;letter-spacing:-.02em}
++.brand .sub{font-size:12px;color:var(--muted)}
++.topbar-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
++.pill{display:inline-flex;align-items:center;gap:7px;padding:7px 14px;border:1px solid var(--border);border-radius:999px;background:var(--surface);font-size:12px;color:var(--muted);white-space:nowrap}
++.back-link{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font-size:13px;font-weight:600;text-decoration:none;transition:background .2s,border-color .2s}
++.back-link:hover{background:var(--surface-2);border-color:var(--border-strong)}
++.refresh-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid rgba(52,211,153,.4);background:rgba(52,211,153,.1);color:#9ff0cf;font:inherit;font-size:13px;font-weight:650;padding:8px 15px;border-radius:10px;cursor:pointer;transition:background .2s,transform .15s}
++.refresh-btn:hover{background:rgba(52,211,153,.2);transform:translateY(-1px)}
++.refresh-btn:disabled{opacity:.6;cursor:wait}
++.refresh-btn .spin{display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%}
++.refresh-btn.loading .spin{animation:spin .7s linear infinite}
++@keyframes spin{to{transform:rotate(360deg)}}
++.live-dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 0 rgba(52,211,153,.5);animation:pulse 2.2s ease-out infinite}
++@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(52,211,153,.45)}70%{box-shadow:0 0 0 7px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
++
++.reveal{opacity:0;transform:translateY(18px);transition:opacity .7s ease,transform .7s ease}
++.reveal.in{opacity:1;transform:none}
++.section-head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:18px;flex-wrap:wrap}
++.section-head h2{font-size:21px;font-weight:700;letter-spacing:-.02em}
++.section-sub{color:var(--muted);font-size:13px;margin-top:3px}
++.muted{color:var(--muted);font-size:12px}
++.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);backdrop-filter:blur(8px)}
++
++/* hero */
++.hero-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
++.tile{position:relative;overflow:hidden;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px 20px 18px;display:flex;flex-direction:column;gap:6px;transition:transform .25s ease,border-color .25s ease}
++.tile:hover{transform:translateY(-3px);border-color:var(--border-strong)}
++.tile::before{content:"";position:absolute;top:0;left:0;right:0;height:2px;opacity:.9;background:linear-gradient(90deg,var(--accent,var(--red)),transparent 80%)}
++.tile-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
++.tile-num{font-size:30px;font-weight:750;letter-spacing:-.03em;font-variant-numeric:tabular-nums;line-height:1.1}
++.tile-sub{font-size:12px;color:var(--faint);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
++.spark{position:absolute;right:14px;bottom:12px;width:96px;height:30px;opacity:.85}
++.chip{display:inline-flex;align-items:center;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;padding:2px 7px;border-radius:999px}
++.chip.up{color:#bdf0cc;background:rgba(52,211,153,.14)}
++.chip.dn{color:#f2c0c0;background:rgba(255,71,87,.14)}
++.chip.flat{color:var(--muted);background:rgba(255,255,255,.05)}
++
++/* segmented control */
++.seg{display:inline-flex;padding:3px;gap:2px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}
++.seg-btn{border:0;background:transparent;color:var(--muted);font:inherit;font-size:12.5px;font-weight:600;padding:7px 13px;border-radius:8px;cursor:pointer;transition:background .2s,color .2s}
++.seg-btn:hover{color:var(--text)}
++.seg-btn.active{background:var(--surface-2);color:var(--text);box-shadow:inset 0 0 0 1px var(--border)}
++
++/* chart */
++.chart-card{padding:22px 22px 12px}
++.chart-wrap{position:relative;height:300px}
++.chart-wrap svg{display:block;width:100%;height:100%;overflow:visible}
++.axis-label{fill:var(--faint);font-size:11px;font-variant-numeric:tabular-nums}
++.grid-line{stroke:rgba(255,255,255,.055);stroke-dasharray:3 5}
++.chart-area{opacity:0;animation:fadeIn .9s ease .5s forwards}
++@keyframes fadeIn{to{opacity:1}}
++.chart-bar{transform-box:fill-box;transform-origin:bottom;animation:barGrow .7s cubic-bezier(.22,1,.36,1) both}
++@keyframes barGrow{from{transform:scaleY(0)}to{transform:scaleY(1)}}
++.crosshair{stroke:rgba(255,255,255,.22);stroke-width:1}
++.hover-dot{filter:drop-shadow(0 0 5px currentColor)}
++.chart-tip{position:fixed;z-index:50;pointer-events:none;background:rgba(16,16,23,.95);border:1px solid var(--border-strong);border-radius:10px;padding:9px 12px;font-size:12px;color:var(--muted);box-shadow:0 10px 32px rgba(0,0,0,.55);white-space:nowrap}
++.chart-tip b{display:block;color:var(--text);font-size:12.5px;margin-bottom:2px}
++.stat-strip{display:flex;flex-wrap:wrap;gap:0 36px;padding:16px 4px 10px;border-top:1px solid var(--border);margin-top:14px}
++.strip-item{padding:4px 0}
++.strip-item .k{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);display:block}
++.strip-item .v{font-size:16px;font-weight:650;font-variant-numeric:tabular-nums}
++
++/* north-star */
++.northstar{margin-top:14px;border-top:1px solid var(--border);padding-top:16px;display:flex;align-items:center;gap:20px;flex-wrap:wrap}
++.northstar .lab{font-size:11px;color:var(--gold);font-weight:700;text-transform:uppercase;letter-spacing:.08em}
++.northstar .big{font-size:18px;font-weight:750}
++.northstar .barwrap{flex:1;min-width:220px}
++.northstar .track{height:10px;border-radius:999px;background:rgba(255,255,255,.06);overflow:hidden;border:1px solid var(--border)}
++.northstar .fill{height:100%;width:0;border-radius:999px;background:linear-gradient(90deg,#e8a800,var(--gold));transition:width 1.3s cubic-bezier(.2,.7,.2,1)}
++.northstar .scale{display:flex;justify-content:space-between;color:var(--faint);font-size:11px;margin-top:5px}
++
++/* results checker */
++.pending-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-bottom:14px}
++.pending-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;display:flex;flex-direction:column;gap:12px;transition:border-color .3s,box-shadow .3s}
++.pending-card .v-title{font-size:14px;font-weight:600;line-height:1.35}
++.pending-card .v-meta{font-size:12px;color:var(--faint)}
++.check-btn{align-self:flex-start;border:1px solid rgba(255,71,87,.45);background:var(--red-soft);color:#ff8c97;font:inherit;font-size:12.5px;font-weight:650;padding:8px 16px;border-radius:9px;cursor:pointer;transition:background .2s,transform .15s}
++.check-btn:hover{background:rgba(255,71,87,.24);transform:translateY(-1px)}
++.check-btn:disabled{opacity:.55;cursor:wait}
++.pending-card.done{border-color:rgba(52,211,153,.45);box-shadow:0 0 0 1px rgba(52,211,153,.25),0 8px 30px rgba(52,211,153,.07)}
++.result-row{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
++.result-views{font-size:26px;font-weight:750;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
++.vs-median{font-size:12px;color:var(--faint)}
++.badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px;letter-spacing:.04em}
++.badge-done{background:rgba(52,211,153,.13);color:var(--green);border:1px solid rgba(52,211,153,.35)}
++.empty-note{grid-column:1/-1;padding:26px;text-align:center;color:var(--faint);border:1px dashed var(--border);border-radius:var(--radius);font-size:13px}
++.archive-card{padding:18px 22px;margin-top:2px}
++.archive-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px}
++.archive-head h3{font-size:14px;font-weight:700}
++.archive-row{display:grid;grid-template-columns:1fr auto auto auto;gap:18px;align-items:center;padding:11px 2px;border-top:1px solid var(--border);font-size:13px;animation:rowIn .45s ease both}
++@keyframes rowIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
++.archive-row .a-title{font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
++.archive-row .a-views{font-variant-numeric:tabular-nums;font-weight:650}
++.archive-row .a-date{color:var(--faint);font-size:12px}
++
++/* outlier chips */
++.t-fire{color:var(--gold);background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.35)}
++.t-high{color:var(--green);background:rgba(52,211,153,.11);border:1px solid rgba(52,211,153,.3)}
++.t-mid{color:var(--blue);background:rgba(79,141,249,.12);border:1px solid rgba(79,141,249,.3)}
++.t-low{color:var(--faint);background:rgba(255,255,255,.04);border:1px solid var(--border)}
++
++/* table */
++.search{background:var(--surface);border:1px solid var(--border);border-radius:10px;color:var(--text);font:inherit;font-size:13px;padding:9px 14px;width:240px;outline:none;transition:border-color .2s}
++.search:focus{border-color:var(--border-strong)}
++.search::placeholder{color:var(--faint)}
++.table-card{overflow:hidden}
++.table-scroll{max-height:560px;overflow:auto}
++.table-scroll::-webkit-scrollbar{width:9px;height:9px}
++.table-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:99px}
++table{width:100%;border-collapse:collapse;font-size:13px}
++thead th{position:sticky;top:0;z-index:2;background:#101017;text-align:left;font-size:11px;font-weight:650;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);padding:12px 14px;border-bottom:1px solid var(--border-strong);white-space:nowrap;user-select:none}
++th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
++th.sortable{cursor:pointer}
++th.sortable:hover{color:var(--text)}
++th.sorted{color:var(--text)}
++th .arrow{font-size:9px;margin-left:4px;opacity:.85}
++tbody td{padding:10px 14px;border-bottom:1px solid rgba(255,255,255,.045)}
++tbody tr{transition:background .15s}
++tbody tr:hover{background:rgba(255,255,255,.03)}
++.th-rank{width:44px}
++td.rank{color:var(--faint);font-size:12px;font-variant-numeric:tabular-nums}
++.th-title{min-width:320px}
++td.title-cell{max-width:460px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:530}
++td.title-cell a{color:inherit;text-decoration:none}
++td.title-cell a:hover{color:#fff;text-decoration:underline;text-underline-offset:3px}
++td.date-cell{color:var(--muted);font-size:12.5px;white-space:nowrap}
++.chip-cell{display:inline-flex;align-items:center;font-size:11.5px;font-weight:700;font-variant-numeric:tabular-nums;padding:3px 9px;border-radius:999px}
++.status-done{color:var(--green);font-size:12px;font-weight:650;white-space:nowrap}
++.status-pending{color:var(--gold);font-size:12px;font-weight:600;white-space:nowrap}
++.status-none{color:var(--faint)}
++
++/* platforms */
++.platform-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}
++.platform{padding:20px;display:flex;flex-direction:column;gap:8px;min-height:138px;position:relative;overflow:hidden}
++.platform-top{display:flex;align-items:center;justify-content:space-between}
++.platform-name{font-size:13px;font-weight:700}
++.platform-num{font-size:26px;font-weight:750;font-variant-numeric:tabular-nums;letter-spacing:-.02em;margin-top:auto}
++.platform-sub{font-size:11.5px;color:var(--faint)}
++.conn{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--green);font-weight:600}
++.conn.off{color:var(--faint)}
++.platform::after{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--pc,var(--red)),transparent 75%)}
++.platform.locked{border-style:dashed}
++
++/* pipeline funnel */
++.funnel{display:flex;flex-direction:column;gap:7px;padding:18px 20px}
++.fr{display:grid;grid-template-columns:96px 1fr 48px;align-items:center;gap:12px}
++.fr .fl{color:var(--muted);font-size:12.5px;text-align:right;text-transform:capitalize}
++.fr .ft{height:26px;border-radius:7px;background:rgba(255,255,255,.04);overflow:hidden;border:1px solid var(--border)}
++.fr .fb{height:100%;width:0;border-radius:7px 0 0 7px;transition:width 1.1s cubic-bezier(.2,.7,.2,1);background:linear-gradient(90deg,rgba(79,141,249,.5),rgba(167,139,250,.75))}
++.fr.pub .fb{background:linear-gradient(90deg,rgba(52,211,153,.5),rgba(45,212,191,.75))}
++.fr .fv{font-weight:700;font-size:13px;font-variant-numeric:tabular-nums}
++
++.toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(8px);background:rgba(18,18,26,.96);border:1px solid var(--border-strong);border-radius:12px;padding:13px 20px;font-size:13px;color:var(--text);box-shadow:0 14px 44px rgba(0,0,0,.6);opacity:0;transition:opacity .3s,transform .3s;z-index:100;max-width:480px;text-align:center}
++.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
++.footnote{text-align:center;color:var(--faint);font-size:12px;padding-top:8px}
++
++@media(max-width:1020px){.hero-grid{grid-template-columns:repeat(3,1fr)} .platform-grid{grid-template-columns:repeat(2,1fr)}}
++@media(max-width:560px){.hero-grid{grid-template-columns:repeat(2,1fr)} .platform-grid{grid-template-columns:1fr} .section-head{align-items:flex-start;flex-direction:column} .search{width:100%}}
++
++/* tabs */
++.tabs{max-width:1180px;margin:0 auto;padding:0 28px;display:flex;gap:4px;border-bottom:1px solid var(--border)}
++.tab{border:0;background:transparent;color:var(--muted);font:inherit;font-size:14px;font-weight:650;padding:12px 18px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .2s,border-color .2s}
++.tab:hover{color:var(--text)}
++.tab.active{color:var(--text);border-bottom-color:var(--red)}
++.tab .tcount{font-size:11px;color:var(--faint);margin-left:5px;font-variant-numeric:tabular-nums}
++.tab-pane{display:flex;flex-direction:column;gap:50px}
++.tab-pane[hidden]{display:none}
++.seg-group{display:flex;gap:8px;flex-wrap:wrap}
++
++/* archive as result cards */
++.archive-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
++.result-card{background:var(--surface);border:1px solid rgba(52,211,153,.4);border-radius:var(--radius);padding:16px 18px;display:flex;flex-direction:column;gap:9px;box-shadow:0 0 0 1px rgba(52,211,153,.18),0 8px 30px rgba(52,211,153,.06);animation:rowIn .45s ease both}
++.rc-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
++.rc-title{font-size:13.5px;font-weight:600;line-height:1.35;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
++.rc-date{font-size:11.5px;color:var(--faint)}
++
++/* website visitors */
++.site-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
++.site-card{padding:18px 20px;display:flex;flex-direction:column;gap:10px;position:relative;overflow:hidden}
++.site-card::after{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--sc,var(--cyan)),transparent 75%)}
++.site-name{font-size:13px;font-weight:700}
++.site-host{font-size:11.5px;color:var(--faint)}
++.site-big{font-size:26px;font-weight:750;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
++.site-row{display:flex;gap:20px;flex-wrap:wrap}
++.site-row .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--faint);display:block}
++.site-row .v{font-size:14px;font-weight:650;font-variant-numeric:tabular-nums}
++.site-card.soon{border-style:dashed;opacity:.82}
++
++/* github stars-by-repo */
++.gh-repos{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px 22px;margin-top:8px}
++.gh-repo{display:flex;align-items:center;justify-content:space-between;font-size:12.5px;color:var(--muted);padding:3px 0}
++.gh-repo .s{color:var(--gold);font-weight:700;font-variant-numeric:tabular-nums}
++
++/* members tab */
++.mem-tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}
++.focus-card{padding:16px 20px}
++.focus-row{display:grid;grid-template-columns:150px 1fr 46px;align-items:center;gap:12px;margin:7px 0}
++.focus-row .fl{color:var(--muted);font-size:12.5px;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
++.focus-row .ft{height:22px;border-radius:6px;background:rgba(255,255,255,.04);overflow:hidden;border:1px solid var(--border)}
++.focus-row .fb{height:100%;width:0;border-radius:6px 0 0 6px;background:linear-gradient(90deg,rgba(167,139,250,.55),rgba(79,141,249,.8));transition:width 1s cubic-bezier(.2,.7,.2,1)}
++.focus-row .fv{font-weight:700;font-size:12.5px;font-variant-numeric:tabular-nums}
++.st-badge{display:inline-flex;align-items:center;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;white-space:nowrap}
++.st-paid{color:var(--green);background:rgba(52,211,153,.13);border:1px solid rgba(52,211,153,.32)}
++.st-free{color:var(--blue);background:rgba(79,141,249,.13);border:1px solid rgba(79,141,249,.3)}
++.st-legacy{color:var(--gold);background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.3)}
++.st-cancelled{color:var(--faint);background:rgba(255,255,255,.04);border:1px solid var(--border)}
++.gh-repo.site .s{color:var(--cyan)}
++.gh-repo.site .nm{display:inline-flex;align-items:center;gap:6px}
++.gh-repo .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
++
++/* video thumbnails */
++.v-thumb{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:10px;border:1px solid var(--border);background:#0d0d14;display:block}
++.tbl-thumb{width:60px;height:34px;object-fit:cover;border-radius:5px;border:1px solid var(--border);background:#0d0d14;flex:0 0 auto}
++.td-title-flex{display:flex;align-items:center;gap:10px;min-width:0}
++.td-title-flex a,.td-title-flex span.t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
++
++/* top strip — open source & web (sexy list) */
++.strip-cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
++.strip-col{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;backdrop-filter:blur(8px)}
++.strip-col h3{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin-bottom:8px;display:flex;justify-content:space-between;align-items:baseline}
++.strip-col h3 .agg{color:var(--faint);font-weight:600;letter-spacing:0}
++.srow{position:relative;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 10px;border-radius:9px;overflow:hidden;transition:background .2s;text-decoration:none;color:var(--text)}
++.srow:hover{background:var(--surface-2)}
++.srow .bar{position:absolute;left:0;top:0;bottom:0;border-radius:9px;opacity:.10;transition:width .9s cubic-bezier(.2,.7,.2,1)}
++.srow .lab{position:relative;display:flex;align-items:center;gap:9px;font-size:13px;font-weight:560;min-width:0;overflow:hidden}
++.srow .lab .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
++.srow .val{position:relative;font-variant-numeric:tabular-nums;font-weight:750;font-size:14px;white-space:nowrap}
++.srow .ico{width:18px;height:18px;border-radius:5px;flex:0 0 auto;display:grid;place-items:center;font-size:11px}
++.srow.gold .val{color:var(--gold)} .srow.gold .bar{background:var(--gold)} .srow.gold .ico{background:rgba(251,191,36,.16)}
++.srow.cyan .val{color:var(--cyan)} .srow.cyan .bar{background:var(--cyan)} .srow.cyan .ico{background:rgba(45,212,191,.16)}
++@media(max-width:760px){.strip-cols{grid-template-columns:1fr}}
++
++/* posting calendar */
++.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
++.cal-dow{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);text-align:center;padding:2px 0}
++.cal-cell{position:relative;aspect-ratio:1/0.66;border:1px solid var(--border);border-radius:9px;background:var(--surface);padding:6px;display:flex;flex-direction:column;overflow:hidden;transition:transform .18s,border-color .18s}
++.cal-cell.empty{border-color:transparent;background:transparent}
++.cal-cell.has{border-color:rgba(52,211,153,.55);box-shadow:0 0 0 1px rgba(52,211,153,.22)}
++.cal-cell.has:hover{transform:translateY(-2px)}
++.cal-cell .dnum{position:relative;font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums}
++.cal-cell.has .dnum{color:#fff;font-weight:700;text-shadow:0 1px 3px rgba(0,0,0,.8)}
++.cal-thumb{position:absolute;inset:0;background-size:cover;background-position:center;opacity:.32}
++.cal-cell.has:hover .cal-thumb{opacity:.5}
++.cal-badge{position:relative;margin-top:auto;font-size:10.5px;font-weight:750;color:#fff;font-variant-numeric:tabular-nums;text-shadow:0 1px 3px rgba(0,0,0,.85)}
++.cal-cell.today{outline:2px solid var(--gold);outline-offset:-2px}
++@media(max-width:560px){.cal-cell{padding:4px} .cal-cell .dnum{font-size:10px}}
++
++/* hide mode (filming) */
++.hidden-val{filter:blur(9px);-webkit-filter:blur(9px);user-select:none;pointer-events:none}
++#hide-toggle.on{color:var(--gold);border-color:rgba(251,191,36,.45)}
++
++/* YouTube-Studio overview */
++.ov-headline{font-size:20px;font-weight:750;letter-spacing:-.02em;margin:0 2px 14px;display:none}
++.ov-headline .sub{display:block;font-size:13px;font-weight:500;color:var(--muted);margin-top:4px}
++.studio-cards{display:none;grid-template-columns:repeat(4,1fr);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--surface);margin-bottom:14px}
++.studio-cards.on{display:grid}
++.scard{padding:16px 18px;border-right:1px solid var(--border);display:flex;flex-direction:column;gap:6px}
++.scard:last-child{border-right:0}
++.scard .k{font-size:12px;color:var(--muted);font-weight:600}
++.scard .v{font-size:25px;font-weight:750;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
++.scard .d{font-size:11.5px;color:var(--faint);display:inline-flex;align-items:center;gap:6px}
++.scard .d.dn{color:#e7a3a3} .scard .d.up{color:#9fe0bd}
++@media(max-width:760px){.studio-cards{grid-template-columns:repeat(2,1fr)} .scard:nth-child(2){border-right:0}}
++.vmark{fill:var(--green);opacity:.95;cursor:pointer}
++.chart-tip .tip-thumb{width:140px;aspect-ratio:16/9;object-fit:cover;border-radius:6px;display:block;margin-bottom:7px;border:1px solid var(--border-strong)}
++
++/* calendar quarter / year — mini month grids */
++.cal-months{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
++.cal-mini h4{font-size:12px;color:var(--muted);margin-bottom:7px;text-align:center;font-weight:650;cursor:pointer}
++.cal-mini h4:hover{color:var(--text)}
++
++/* clickable content-pipeline rows */
++.fr-link{text-decoration:none;color:inherit;cursor:pointer;border-radius:7px;transition:background .15s}
++.fr-link:hover{background:rgba(255,255,255,.05)}
++.fr-link:hover .fl{color:var(--text)}
++.cal-year{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
++.ym-cell{border:1px solid var(--border);border-radius:11px;padding:13px 15px;cursor:pointer;transition:border-color .2s,transform .15s;display:flex;flex-direction:column;gap:3px}
++.ym-cell:hover{border-color:var(--border-strong);transform:translateY(-2px)}
++.ym-cell.none{opacity:.4}
++.ym-name{font-size:12px;color:var(--muted);font-weight:600}
++.ym-count{font-size:23px;font-weight:750;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
++.ym-views{font-size:11.5px;color:var(--faint)}
++@media(max-width:760px){.cal-months{grid-template-columns:1fr} .cal-year{grid-template-columns:repeat(3,1fr)}}
++
++/* reveal toggle (members emails) */
++.reveal-btn{border:1px solid var(--border);background:var(--surface);color:var(--muted);font:inherit;font-size:12px;font-weight:600;padding:8px 14px;border-radius:9px;cursor:pointer;transition:background .2s,color .2s}
++.reveal-btn:hover{background:var(--surface-2);color:var(--text)}
++.reveal-btn.on{color:var(--gold);border-color:rgba(251,191,36,.4)}
++@media(max-width:1020px){.site-grid{grid-template-columns:1fr} .mem-tiles{grid-template-columns:repeat(3,1fr)}}
++@media(max-width:560px){.mem-tiles{grid-template-columns:repeat(2,1fr)} .focus-row{grid-template-columns:100px 1fr 40px}}
++</style>
++</head>
++<body>
++<div class="bg-glow" aria-hidden="true"></div>
++
++<header class="topbar">
++  <div class="brand">
++    <div class="logo">A</div>
++    <div>
++      <h1>Creator Intelligence</h1>
++      <span class="sub">@theaiandy · every number that matters</span>
++    </div>
++  </div>
++  <div class="topbar-right">
++    <a class="back-link" href="/">← CreatorGrowth</a>
++    <button class="back-link" id="hide-toggle" title="Hide MRR & retention for filming">🙈 Hide $</button>
++    <button class="refresh-btn" id="refresh"><span class="spin"></span> Refresh</button>
++    <span class="pill"><span class="live-dot"></span><span id="sync-label">Synced</span></span>
++  </div>
++</header>
++
++<nav class="tabs">
++  <button class="tab active" data-tab="intel">Intelligence</button>
++  <button class="tab" data-tab="members">Members <span class="tcount" id="tab-mem-count"></span></button>
++</nav>
++
++<main>
++  <div id="tab-intel" class="tab-pane">
++  <section class="hero-grid reveal" id="heroes"></section>
++
++  <!-- Open source & web -->
++  <section class="reveal">
++    <div class="section-head"><div><h2>Open source &amp; web</h2><p class="section-sub" id="strip-sub">Stars per repo · live site visitors</p></div></div>
++    <div id="top-strip"></div>
++  </section>
++
++  <!-- Channel overview -->
++  <section class="reveal">
++    <div class="section-head">
++      <div><h2>Channel overview</h2><p class="section-sub" id="ov-sub">Real YouTube views — like Studio</p></div>
++      <div class="seg-group">
++        <div class="seg" id="ov-window">
++          <button class="seg-btn" data-win="all">All</button>
++          <button class="seg-btn" data-win="90">90d</button>
++          <button class="seg-btn active" data-win="28">28d</button>
++        </div>
++        <div class="seg" id="ov-modes">
++          <button class="seg-btn active" data-mode="views">YouTube</button>
++          <button class="seg-btn" data-mode="ig">Instagram</button>
++          <button class="seg-btn" data-mode="fb">Facebook</button>
++          <button class="seg-btn" data-mode="cumulative">Cumulative</button>
++          <button class="seg-btn" data-mode="videos">Videos</button>
++        </div>
++      </div>
++    </div>
++    <div id="ov-headline" class="ov-headline"></div>
++    <div id="ov-studio" class="studio-cards"></div>
++    <div class="card chart-card">
++      <div class="chart-wrap" id="ov-chart"></div>
++      <div class="stat-strip" id="ov-strip"></div>
++    </div>
++  </section>
++
++  <!-- Posting calendar -->
++  <section class="reveal">
++    <div class="section-head">
++      <div><h2>Posting calendar</h2><p class="section-sub" id="cal-sub">Every video you posted — hover a day for views</p></div>
++      <div class="seg-group">
++        <div class="seg" id="cal-range"><button class="seg-btn active" data-range="month">Month</button><button class="seg-btn" data-range="quarter">Quarter</button><button class="seg-btn" data-range="year">Year</button></div>
++        <div class="seg"><button class="seg-btn" id="cal-prev">‹</button></div>
++        <span class="pill" id="cal-label"></span>
++        <div class="seg"><button class="seg-btn" id="cal-next">›</button></div>
++      </div>
++    </div>
++    <div class="card" style="padding:18px 20px"><div id="cal-body"></div></div>
++  </section>
++
++  <!-- Content pipeline -->
++  <section class="reveal">
++    <div class="section-head"><div><h2>Content pipeline</h2><p class="section-sub">Cards in flight in each stage of the production line</p></div><span class="pill" id="pipe-total"></span></div>
++    <div class="card"><div class="funnel" id="funnel"></div></div>
++  </section>
++
++  <!-- Revenue & community -->
++  <section class="reveal" id="biz-section">
++    <div class="section-head">
++      <div><h2>Revenue &amp; community</h2><p class="section-sub">Skool business, by month — hover for detail</p></div>
++      <div class="seg" id="biz-modes">
++        <button class="seg-btn active" data-mode="mrr">MRR</button>
++        <button class="seg-btn" data-mode="members">Members</button>
++        <button class="seg-btn" data-mode="retention">Retention</button>
++      </div>
++    </div>
++    <div class="card chart-card">
++      <div class="chart-wrap" id="biz-chart"></div>
++      <div class="northstar">
++        <div><div class="lab">North-Star · MRR</div><div class="big"><span id="ns-cur">$—</span> <span style="color:var(--faint);font-weight:600;font-size:14px">/ <span id="ns-goal">$40K</span></span></div></div>
++        <div class="barwrap"><div class="track"><div class="fill" id="ns-fill"></div></div><div class="scale"><span>$0</span><span id="ns-pct">—</span><span id="ns-goal2">$40K</span></div></div>
++      </div>
++    </div>
++  </section>
++
++  <!-- Website visitors -->
++  <section class="reveal">
++    <div class="section-head">
++      <div><h2>Website visitors</h2><p class="section-sub" id="sites-sub">Unique visitors across your apps</p></div>
++      <div class="seg" id="site-modes"></div>
++    </div>
++    <div class="card chart-card"><div class="chart-wrap" id="site-chart"></div><div class="stat-strip" id="site-strip"></div></div>
++    <div class="site-grid" id="site-grid" style="margin-top:14px"></div>
++  </section>
++
++  <!-- Per-video table -->
++  <section class="reveal">
++    <div class="section-head">
++      <div><h2>YouTube analytics</h2><p class="section-sub" id="table-sub">Your latest videos — live views, newest first</p></div>
++      <input class="search" id="search" type="search" placeholder="Filter titles…" autocomplete="off">
++    </div>
++    <div class="card table-card"><div class="table-scroll"><table id="video-table">
++      <thead><tr>
++        <th class="th-rank">#</th>
++        <th data-key="title" class="sortable th-title">Title</th>
++        <th data-key="published" class="sortable">Published</th>
++        <th data-key="views" class="sortable num">Views</th>
++        <th data-key="outlier" class="sortable num">Outlier</th>
++        <th data-key="likes" class="sortable num">Likes</th>
++        <th data-key="comments" class="sortable num">Comments</th>
++      </tr></thead>
++      <tbody id="video-tbody"></tbody>
++    </table></div></div>
++  </section>
++
++  <footer class="footnote">YouTube views live from the Analytics API · members live from the Auto&nbsp;Tracker · GitHub + website visitors live · Refresh pulls everything fresh</footer>
++  </div><!-- /tab-intel -->
++
++  <div id="tab-members" class="tab-pane" hidden>
++    <!-- Member summary -->
++    <section class="reveal">
++      <div class="section-head"><div><h2>Members</h2><p class="section-sub" id="mem-sub">Live from the Mate&nbsp;OS Auto&nbsp;Tracker — everyone entering the community</p></div><span class="pill" id="mem-synced"></span></div>
++      <div class="mem-tiles" id="mem-tiles"></div>
++    </section>
++
++    <!-- Why they joined -->
++    <section class="reveal">
++      <div class="section-head"><div><h2>Why they joined</h2><p class="section-sub">#1 focus with AI — active members</p></div></div>
++      <div class="card focus-card" id="focus-card"></div>
++    </section>
++
++    <!-- Roster -->
++    <section class="reveal">
++      <div class="section-head">
++        <div><h2>Roster</h2><p class="section-sub" id="roster-sub"></p></div>
++        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
++          <button class="reveal-btn" id="mem-reveal">🙈 Emails masked</button>
++          <input class="search" id="mem-search" type="search" placeholder="Filter name / focus…" autocomplete="off">
++        </div>
++      </div>
++      <div class="card table-card"><div class="table-scroll"><table id="mem-table">
++        <thead><tr>
++          <th class="th-rank">#</th>
++          <th data-key="name" class="sortable th-title">Name</th>
++          <th data-key="status" class="sortable">Status</th>
++          <th data-key="focus" class="sortable">#1 focus</th>
++          <th data-key="joined" class="sortable">Joined</th>
++          <th data-key="email" class="sortable">Email</th>
++        </tr></thead>
++        <tbody id="mem-tbody"></tbody>
++      </table></div></div>
++    </section>
++  </div><!-- /tab-members -->
++</main>
++
++<div class="chart-tip" id="tip" hidden></div>
++<div class="toast" id="toast" hidden></div>
++
++<script>
++"use strict";
++const S = { data:null, ovMode:"views", ovWindow:"28", bizMode:"mrr", sort:{key:"published",dir:-1}, query:"", tab:"intel", memSort:{key:"joined",dir:-1}, memQuery:"", memReveal:false, siteMode:null, calYM:null, calRange:"month", hide:(localStorage.getItem("cg_hide")==="1"), lastSig:null };
++const SITES=[{host:"creatorgrowth.com",name:"CreatorGrowth",col:"var(--red)",cx:"#ff4757"},{host:"agentflow.net",name:"AgentFlow",col:"var(--violet)",cx:"#a78bfa"},{host:"mindflow.fyi",name:"MindFlow",col:"var(--cyan)",cx:"#2dd4bf"}];
++const ST_CLASS={Paid:"st-paid",Free:"st-free",Legacy:"st-legacy",Cancelled:"st-cancelled"};
++function siteTotals(){const sv=S.data.site_visitors||{};let d30=0,d90=0,all=0,n=0;for(const k in sv){d30+=sv[k].d30||0;d90+=sv[k].d90||0;all+=sv[k].all_time||0;n++;}return{d30,d90,all,n};}
++const $ = (s)=>document.querySelector(s);
++const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
++const nf=new Intl.NumberFormat("en-US");
++
++/* formatting */
++const fmtFull=(n)=>nf.format(Math.round(n||0));
++function fmtAbbr(n){n=n||0;const a=Math.abs(n);if(a>=1e6)return(n/1e6).toFixed(a>=1e7?1:2).replace(/\.?0+$/,"")+"M";if(a>=1e3)return(n/1e3).toFixed(a>=1e5?0:1).replace(/\.0$/,"")+"K";return String(Math.round(n));}
++const fmtMoney=(n)=>"$"+fmtFull(n);
++const fmtMoneyK=(n)=>"$"+((n||0)/1000).toFixed((n%1000)?1:0).replace(/\.0$/,"")+"K";
++function monLabel(m,short){const[y,mo]=m.split("-").map(Number);return short?`${MONTHS[mo-1]} ’${String(y).slice(2)}`:`${MONTHS[mo-1]} ${y}`;}
++function fmtDate(iso){if(!iso)return"—";const[y,m,d]=iso.split("-").map(Number);return`${MONTHS[m-1]} ${d}, ${y}`;}
++function daysAgo(iso){const d=Math.max(0,Math.floor((Date.now()-new Date(iso+"T12:00:00"))/864e5));return d===0?"today":d===1?"yesterday":`${d} days ago`;}
++const esc=(s)=>String(s).replace(/[&<>"']/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
++
++function countUp(el,target,fmt=fmtFull,dur=1400){const t0=performance.now();const tick=(now)=>{const t=Math.min(1,(now-t0)/dur),e=1-Math.pow(1-t,3);el.textContent=fmt(target*e);if(t<1)requestAnimationFrame(tick);};requestAnimationFrame(tick);}
++function chip(o){const t=o>=10?"t-fire":o>=3?"t-high":o>=1?"t-mid":"t-low";const f=o>=10?"🔥 ":"";return`<span class="chip-cell ${t}">${f}${o.toFixed(o>=10?1:2)}×</span>`;}
++function deltaChip(cur,prev,opt={}){if(cur==null||prev==null)return'<span class="chip flat">—</span>';const diff=cur-prev,cls=diff>0?"up":diff<0?"dn":"flat",ar=diff>0?"▲":diff<0?"▼":"•";let t;if(opt.pts)t=(diff>0?"+":"")+Math.round(diff)+" pts";else if(opt.money)t=(diff>=0?"+$":"-$")+fmtAbbr(Math.abs(diff));else t=(diff>0?"+":"")+fmtAbbr(diff);return`<span class="chip ${cls}">${ar} ${t}</span>`;}
++
++/* generic chart with hover crosshair + tooltip */
++function niceTicks(max,count=4){const raw=max/count||1;const mag=Math.pow(10,Math.floor(Math.log10(raw||1)));const step=[1,2,2.5,5,10].map(m=>m*mag).find(s=>s>=raw)||raw;const t=[];for(let v=0;v<=max+step*0.001;v+=step)t.push(v);return t;}
++function smoothPath(pts){if(pts.length<3)return"M"+pts.map(p=>p.join(",")).join("L");const clamp=(v,a,b)=>Math.max(Math.min(a,b),Math.min(Math.max(a,b),v));let d=`M${pts[0][0]},${pts[0][1]}`;for(let i=0;i<pts.length-1;i++){const p0=pts[Math.max(0,i-1)],p1=pts[i],p2=pts[i+1],p3=pts[Math.min(pts.length-1,i+2)];const c1=[p1[0]+(p2[0]-p0[0])/6,clamp(p1[1]+(p2[1]-p0[1])/6,p1[1],p2[1])];const c2=[p2[0]-(p3[0]-p1[0])/6,clamp(p2[1]-(p3[1]-p1[1])/6,p1[1],p2[1])];d+=`C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${p2[0]},${p2[1]}`;}return d;}
++
++function renderChart(hostId, series, opts){
++  const wrap=$(hostId);
++  if(!series.length){wrap.innerHTML='<div class="muted" style="padding:40px;text-align:center">No data yet.</div>';return;}
++  const color=opts.color, isBar=opts.type==="bar";
++  const W=wrap.clientWidth||1000,H=wrap.clientHeight||300,M={l:54,r:14,t:16,b:30};
++  const iw=W-M.l-M.r,ih=H-M.t-M.b;
++  const max=Math.max(...series.map(d=>d.value),1),ticks=niceTicks(max),yMax=ticks[ticks.length-1];
++  const x=(i)=>M.l+(series.length<=1?iw/2:(i/(series.length-1))*iw);
++  const y=(v)=>M.t+ih-(v/yMax)*ih;
++  let inner=`<defs><linearGradient id="ag-${opts.id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${color}" stop-opacity="0.26"/><stop offset="100%" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>`;
++  for(const t of ticks){inner+=`<line class="grid-line" x1="${M.l}" x2="${W-M.r}" y1="${y(t)}" y2="${y(t)}"/><text class="axis-label" x="${M.l-10}" y="${y(t)+4}" text-anchor="end">${opts.fmtAxis(t)}</text>`;}
++  const every=Math.ceil(series.length/8);
++  series.forEach((d,i)=>{if(i%every===0||i===series.length-1)inner+=`<text class="axis-label" x="${x(i)}" y="${H-8}" text-anchor="middle">${d.label}</text>`;});
++  if(isBar){const bw=Math.max(3,(iw/series.length)*0.55);series.forEach((d,i)=>{const h=Math.max(0.5,ih*(d.value/yMax));inner+=`<rect class="chart-bar" x="${x(i)-bw/2}" y="${y(d.value)}" width="${bw}" height="${h}" rx="2" fill="${color}" opacity="0.82" style="animation-delay:${i*14}ms"/>`;});}
++  else{const pts=series.map((d,i)=>[x(i),y(d.value)]);const line=smoothPath(pts);const area=`${line}L${x(series.length-1)},${y(0)}L${x(0)},${y(0)}Z`;inner+=`<path class="chart-area" d="${area}" fill="url(#ag-${opts.id})"/><path id="ln-${opts.id}" d="${line}" fill="none" stroke="${color}" stroke-width="2.25" stroke-linejoin="round" stroke-linecap="round" style="filter:drop-shadow(0 0 6px ${color}88)"/>`;}
++  inner+=`<line id="xh-${opts.id}" class="crosshair" y1="${M.t}" y2="${M.t+ih}" x1="-99" x2="-99"/><circle id="hd-${opts.id}" class="hover-dot" r="4" fill="${color}" color="${color}" cx="-99" cy="-99"/>`;
++  const mmap={};
++  if(opts.markers&&opts.markers.length){for(const mk of opts.markers){const mi=mk.i;if(mi>=0&&mi<series.length){mmap[mi]=mk;inner+=`<text class="vmark" x="${x(mi)}" y="${M.t+ih+8}" text-anchor="middle" font-size="11">▲</text>`;}}}
++  const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");
++  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);svg.innerHTML=inner;wrap.replaceChildren(svg);
++  const ln=svg.querySelector(`#ln-${opts.id}`);
++  if(ln){const len=ln.getTotalLength();ln.style.strokeDasharray=len;ln.style.strokeDashoffset=len;ln.getBoundingClientRect();ln.style.transition="stroke-dashoffset 1.3s cubic-bezier(.4,0,.2,1)";ln.style.strokeDashoffset="0";}
++  const tip=$("#tip"),xh=svg.querySelector(`#xh-${opts.id}`),dot=svg.querySelector(`#hd-${opts.id}`);
++  svg.addEventListener("mousemove",(e)=>{const r=svg.getBoundingClientRect();const mx=((e.clientX-r.left)/r.width)*W;const i=Math.max(0,Math.min(series.length-1,Math.round(((mx-M.l)/iw)*(series.length-1))));const d=series[i];xh.setAttribute("x1",x(i));xh.setAttribute("x2",x(i));dot.setAttribute("cx",x(i));dot.setAttribute("cy",y(d.value));const mk=mmap[i];tip.innerHTML=(mk?`<img class="tip-thumb" src="${mk.thumb}" alt=""><b>${mk.title}</b><div style="color:var(--faint);font-size:11px;margin:2px 0 4px">${d.tipTitle}</div>`:`<b>${d.tipTitle}</b>`)+d.tip;tip.hidden=false;tip.style.left=Math.min(window.innerWidth-tip.offsetWidth-12,e.clientX+14)+"px";tip.style.top=(e.clientY-tip.offsetHeight-14)+"px";});
++  svg.addEventListener("mouseleave",()=>{tip.hidden=true;xh.setAttribute("x1",-99);xh.setAttribute("x2",-99);dot.setAttribute("cx",-99);});
++}
++
++/* hero */
++function renderHero(){
++  const c=S.data.channel,kpi=S.data.kpi||{},latest=kpi.latest||{},prev=kpi.prev||{};
++  const gh=S.data.github||{},mem=S.data.members,sv=siteTotals();
++  const memVal=mem&&mem.total_active!=null?mem.total_active:latest.skool_members;
++  const memSub=mem&&mem.total_active!=null
++    ?`${fmtFull(mem.paying)} paying · <span class="chip up">▲ +${fmtFull(mem.new_7d||0)}</span> this week`
++    :`${deltaChip(latest.skool_members,prev.skool_members)} vs last mo`;
++  const tiles=[
++    {k:"Total views",v:c.total_views,f:fmtAbbr,acc:"var(--red)",spark:true,sub:`across ${fmtFull(c.videos)} videos · ${fmtAbbr(c.avg_views)} avg`},
++    {k:"Subscribers",v:c.subscribers,f:fmtAbbr,acc:"var(--red)",sub:latest.yt_subs_gained!=null?`<span class="chip up">▲ +${fmtAbbr(latest.yt_subs_gained)}</span> this month`:"@theaiandy"},
++    {k:"MRR",v:latest.mrr,f:fmtMoney,acc:"var(--green)",sens:true,sub:`${deltaChip(latest.mrr,prev.mrr,{money:true})} vs last mo`},
++    {k:"Skool members",v:memVal,f:fmtFull,acc:"var(--violet)",sub:memSub},
++    {k:"Retention",v:latest.skool_retention,f:(n)=>Math.round(n)+"%",acc:"var(--cyan)",sens:true,sub:`${deltaChip(latest.skool_retention,prev.skool_retention,{pts:true})} vs last mo`},
++    {k:"GitHub stars",v:gh.total_stars,f:fmtFull,acc:"var(--gold)",sub:gh.followers!=null?`${fmtFull(gh.followers)} followers · ${fmtFull(gh.repo_count||0)} repos`:"connect GitHub"},
++    {k:"Website visitors",v:sv.n?sv.d30:null,f:fmtFull,acc:"var(--cyan)",sub:sv.n?`${fmtFull(sv.all)} all-time · ${sv.n} site${sv.n===1?"":"s"}`:"add a Cloudflare token"},
++    {k:"Published · month",v:S.data.uploads_this_month,f:(n)=>Math.round(n),acc:"var(--gold)",sub:`<span class="muted">videos uploaded this month</span>`},
++  ];
++  const host=$("#heroes");host.innerHTML="";
++  tiles.forEach(t=>{
++    const el=document.createElement("article");el.className="tile"+(t.sens?" sens":"");el.style.setProperty("--accent",t.acc);
++    el.innerHTML=`<span class="tile-label">${t.k}</span><span class="tile-num num">—</span><span class="tile-sub">${t.sub||""}</span>${t.spark?'<svg class="spark" id="spark" viewBox="0 0 96 30" preserveAspectRatio="none"></svg>':""}`;
++    host.appendChild(el);
++    const num=el.querySelector(".tile-num");
++    if(t.v==null)num.textContent="—";else countUp(num,t.v,t.f);
++  });
++  // sparkline on total-views tile from monthly
++  const svg=$("#spark");
++  if(svg&&S.data.monthly.length){const vals=S.data.monthly.map(m=>m.views),mx=Math.max(...vals,1);const pts=vals.map((v,i)=>`${(i/(vals.length-1))*96},${30-(v/mx)*26}`).join(" ");svg.innerHTML=`<polyline points="${pts}" fill="none" stroke="#ff4757" stroke-width="1.5" opacity="0.85"/>`;}
++}
++
++/* overview chart */
++// Prefer REAL monthly channel views (YouTube Analytics) over publish-grouped.
++function monthlyData(){
++  const real=S.data.monthly_real,pub=S.data.monthly||[];
++  if(real&&Object.keys(real).length){
++    const vids={};pub.forEach(m=>vids[m.month]=m.videos);
++    return Object.keys(real).sort().map(ym=>({month:ym,views:real[ym],videos:vids[ym]||0}));
++  }
++  return pub;
++}
++function stripItems(items){return items.map(([k,v])=>`<div class="strip-item"><span class="k">${k}</span><span class="v">${v}</span></div>`).join("");}
++function renderOverview(){
++  const winMode=S.ovWindow!=="all";
++  $("#ov-modes").style.opacity=winMode?"0.4":"1";
++  $("#ov-modes").style.pointerEvents=winMode?"none":"auto";
++  $("#ov-studio").classList.remove("on");$("#ov-headline").style.display="none";
++  if(winMode){
++    const w=S.data.windows,days=+S.ovWindow;
++    if(!w||!w.series||!w.series.length){
++      renderChart("#ov-chart",[],{id:"ov",color:"#4f8df9",type:"area",fmtAxis:fmtAbbr});
++      $("#ov-strip").innerHTML=stripItems([["Windowed views","needs YouTube Analytics — hit Refresh"]]);
++      $("#ov-sub").textContent=`Last ${days} days — by day`;return;
++    }
++    const slice=w.series.slice(-days);
++    const byDay={};(S.data.videos||[]).forEach(v=>{if(v.published)(byDay[v.published]=byDay[v.published]||[]).push(v);});
++    const markers=slice.map((d,i)=>{const vs=byDay[d.day];if(!vs)return null;const v=vs[0];return {i,title:esc(v.title)+(vs.length>1?` (+${vs.length-1} more)`:""),thumb:v.thumb||`https://i.ytimg.com/vi/${v.id}/mqdefault.jpg`};}).filter(Boolean);
++    const series=slice.map(d=>({label:d.day.slice(5),value:d.views,tipTitle:d.day,tip:`${fmtFull(d.views)} views`}));
++    renderChart("#ov-chart",series,{id:"ov",color:"#4f8df9",type:"area",fmtAxis:fmtAbbr,markers});
++    const tot=days===28?w.d28:days===90?w.d90:w.d30;
++    $("#ov-strip").innerHTML=stripItems([[`Last ${days}d views`,fmtAbbr(tot)],["Daily avg",fmtAbbr(Math.round(tot/days))],["Videos posted",fmtFull(markers.length)],["28-day",fmtAbbr(w.d28)],["90-day",fmtAbbr(w.d90)]]);
++    $("#ov-sub").textContent=`Real channel views — last ${days} days, by day · ▶ = video posted`;
++    const st=(w.studio||{}).cur,pr=(w.studio||{}).prev;
++    if(days===28&&st){
++      $("#ov-headline").style.display="block";
++      $("#ov-headline").innerHTML=`Your channel got <span style="color:var(--blue)">${fmtFull(st.views)}</span> views in the last 28 days<span class="sub">${markers.length} video${markers.length===1?"":"s"} posted${pr?` · usually ~${fmtAbbr(pr.views)} views`:""}</span>`;
++      const card=(k,v,pv,fmt)=>{const dl=pv!=null?v-pv:null,cls=dl==null?"":(dl<0?"dn":"up"),txt=dl==null||dl===0?"about usual":(dl<0?`▼ ${fmt(Math.abs(dl))} less than usual`:`▲ ${fmt(Math.abs(dl))} more than usual`);return `<div class="scard"><span class="k">${k}</span><span class="v">${fmt(v)}</span><span class="d ${cls}">${txt}</span></div>`;};
++      const sfmt=(n)=>(n>=0?"+":"−")+fmtFull(Math.abs(n));
++      $("#ov-studio").innerHTML=card("Views",st.views,pr&&pr.views,fmtAbbr)+card("Watch time (hrs)",st.watch_hours,pr&&pr.watch_hours,fmtAbbr)+card("Subscribers",st.subs_net,pr&&pr.subs_net,sfmt)+card("Likes",st.likes,pr&&pr.likes,fmtAbbr);
++      $("#ov-studio").classList.add("on");
++    }
++    return;
++  }
++  const m=monthlyData();
++  const months=(S.data.kpi||{}).months||[];
++  let series,color,type="area",platLabel="";
++  if(S.ovMode==="ig"){color="#E1306C";platLabel="Instagram";series=months.filter(x=>x.ig_views).map(x=>({label:monLabel(x.month,true),value:x.ig_views,tipTitle:monLabel(x.month),tip:`${fmtFull(x.ig_views)} Instagram views`}));}
++  else if(S.ovMode==="fb"){color="#4f8df9";platLabel="Facebook";series=months.filter(x=>x.fb_views).map(x=>({label:monLabel(x.month,true),value:x.fb_views,tipTitle:monLabel(x.month),tip:`${fmtFull(x.fb_views)} Facebook views`}));}
++  else if(S.ovMode==="cumulative"){color="#a78bfa";let s=0;series=m.map(d=>({label:monLabel(d.month,true),value:(s+=d.views),tipTitle:monLabel(d.month),tip:`${fmtFull(s)} cumulative views`}));}
++  else if(S.ovMode==="videos"){color="#2dd4bf";type="bar";series=m.map(d=>({label:monLabel(d.month,true),value:d.videos,tipTitle:monLabel(d.month),tip:`${d.videos} video${d.videos===1?"":"s"} published`}));}
++  else{color="#ff4757";series=m.map(d=>({label:monLabel(d.month,true),value:d.views,tipTitle:monLabel(d.month),tip:`${fmtFull(d.views)} views · ${d.videos} video${d.videos===1?"":"s"}`}));}
++  if(platLabel&&!series.length){
++    renderChart("#ov-chart",[],{id:"ov",color,type:"area",fmtAxis:fmtAbbr});
++    $("#ov-strip").innerHTML=stripItems([[`${platLabel} views`,"no monthly data yet — hit Refresh"]]);
++    $("#ov-sub").textContent=`${platLabel} views — by month`;return;
++  }
++  renderChart("#ov-chart",series,{id:"ov",color,type,fmtAxis:fmtAbbr});
++  if(platLabel){
++    $("#ov-sub").textContent=`${platLabel} views — by month (from your KPI feed)`;
++    $("#ov-strip").innerHTML=stripItems([["Months tracked",fmtFull(series.length)],["Latest",fmtAbbr(series[series.length-1].value)],["Peak",fmtAbbr(Math.max(...series.map(s=>s.value)))],["Total",fmtAbbr(series.reduce((a,b)=>a+b.value,0))]]);
++    return;
++  }
++  const c=S.data.channel,best=m.length?m.reduce((a,b)=>b.views>a.views?b:a):null;
++  $("#ov-sub").textContent=S.data.monthly_real?"Real channel views (Analytics) — by month":"Views by publish month";
++  $("#ov-strip").innerHTML=stripItems([["Videos published",fmtFull(c.videos)],["Median views",fmtAbbr(c.median_views)],["Avg views",fmtAbbr(c.avg_views)],["Total likes",fmtAbbr(c.total_likes)],["Total comments",fmtAbbr(c.total_comments)],["Best month",best?`${monLabel(best.month,true)} · ${fmtAbbr(best.views)}`:"—"]]);
++}
++
++/* business chart */
++function renderBiz(){
++  const kpi=S.data.kpi;if(!kpi||!kpi.months||!kpi.months.length){$("#biz-section").style.display="none";return;}
++  // only chart months that actually carry the metric (current month may hold
++  // just live platform views and no MRR/members yet)
++  const has=(d,k)=>d[k]!=null&&d[k]!==0;
++  let series,color;
++  if(S.bizMode==="members"){color="#a78bfa";series=kpi.months.filter(d=>has(d,"skool_members")).map(d=>({label:monLabel(d.month,true),value:d.skool_members,tipTitle:monLabel(d.month),tip:`${fmtFull(d.skool_members)} members`}));}
++  else if(S.bizMode==="retention"){color="#2dd4bf";series=kpi.months.filter(d=>has(d,"skool_retention")).map(d=>({label:monLabel(d.month,true),value:d.skool_retention,tipTitle:monLabel(d.month),tip:`${Math.round(d.skool_retention)}% retained`}));}
++  else{color="#34d399";series=kpi.months.filter(d=>has(d,"mrr")).map(d=>({label:monLabel(d.month,true),value:d.mrr,tipTitle:monLabel(d.month),tip:`${fmtMoney(d.mrr)} MRR`}));}
++  renderChart("#biz-chart",series,{id:"biz",color,type:S.bizMode==="retention"?"bar":"area",fmtAxis:S.bizMode==="mrr"?fmtMoneyK:(S.bizMode==="retention"?(n)=>Math.round(n)+"%":fmtAbbr)});
++  // north-star
++  const goal=kpi.mrr_goal||40000,cur=(kpi.latest||{}).mrr||0,p=Math.min(100,cur/goal*100);
++  $("#ns-cur").textContent=fmtMoney(cur);$("#ns-goal").textContent=fmtMoneyK(goal);$("#ns-goal2").textContent=fmtMoneyK(goal);$("#ns-pct").textContent=p.toFixed(1)+"% there";
++  requestAnimationFrame(()=>{$("#ns-fill").style.width=p+"%";});
++  applyHideMode();
++}
++
++/* top strip: sexy two-column list — GitHub repos + live site visitors */
++function renderTopStrip(){
++  const gh=S.data.github,sv=S.data.site_visitors||{},host=$("#top-strip");
++  const repos=(gh&&gh.repos)||[],maxS=Math.max(1,...repos.map(r=>r.stars));
++  const sites=SITES.filter(s=>sv[s.host]),maxV=Math.max(1,...sites.map(s=>sv[s.host].d30||0));
++  const repoRows=repos.length?repos.map(r=>`<a class="srow gold" href="https://github.com/AndyHafell/${esc(r.name)}" target="_blank" rel="noopener"><span class="bar" style="width:${(r.stars/maxS*100).toFixed(0)}%"></span><span class="lab"><span class="ico">★</span><span class="nm" title="${esc(r.name)}">${esc(r.name)}</span></span><span class="val">${fmtFull(r.stars)}</span></a>`).join(""):'<div class="muted" style="padding:8px 10px">No starred repos yet.</div>';
++  const siteRows=sites.length?sites.map(s=>{const d=sv[s.host],est=d.source==="cloudflare";return `<a class="srow cyan" href="https://${s.host}" target="_blank" rel="noopener" title="${est?"Cloudflare estimate (sampled)":"real unique visitors"}"><span class="bar" style="width:${((d.d30||0)/maxV*100).toFixed(0)}%"></span><span class="lab"><img class="ico" style="background:none" src="https://www.google.com/s2/favicons?domain=${s.host}&sz=32" alt=""><span class="nm">${s.host}</span></span><span class="val">${est?"~":""}${fmtFull(d.d30||0)}</span></a>`;}).join(""):'<div class="muted" style="padding:8px 10px">No site data — hit Refresh.</div>';
++  host.innerHTML=`<div class="strip-cols">
++    <div class="strip-col"><h3><span>GitHub repos</span><span class="agg">${gh?fmtFull(gh.total_stars):0} ★ · ${gh?fmtFull(gh.followers):0} followers</span></h3>${repoRows}</div>
++    <div class="strip-col"><h3><span>Live sites · 30-day visitors</span><span class="agg">${sites.length} live</span></h3>${siteRows}</div>
++  </div>`;
++  $("#strip-sub").textContent=`${gh?fmtFull(gh.repo_count||0):0} repos · ${gh?fmtFull(gh.total_stars):0} stars · ${sites.length} live site${sites.length===1?"":"s"}`;
++}
++
++/* website visitors overview chart (per-site daily series) */
++function renderWebsiteOverview(){
++  const sv=S.data.site_visitors||{},live=SITES.filter(s=>sv[s.host]),seg=$("#site-modes");
++  if(!live.length){seg.innerHTML="";$("#site-chart").innerHTML='<div class="muted" style="padding:40px;text-align:center">No visitor data yet — add a Cloudflare token & hit Refresh.</div>';$("#site-strip").innerHTML="";return;}
++  if(!S.siteMode||!sv[S.siteMode])S.siteMode=live[0].host;
++  seg.innerHTML=live.map(s=>`<button class="seg-btn${s.host===S.siteMode?" active":""}" data-site="${s.host}">${s.name}</button>`).join("");
++  const meta=SITES.find(s=>s.host===S.siteMode)||live[0],d=sv[S.siteMode];
++  const series=(d.series||[]).map(p=>({label:p.day.slice(5),value:p.uniques,tipTitle:p.day,tip:`${fmtFull(p.uniques)} ${d.source==="cloudflare"?"visits":"visitors"}`}));
++  renderChart("#site-chart",series,{id:"site",color:meta.cx,type:"area",fmtAxis:fmtAbbr});
++  const metric=d.source==="cloudflare"?"Cloudflare visits":"Unique visitors";
++  $("#site-strip").innerHTML=stripItems([["Last 30 days",fmtFull(d.d30)],["Tracked total",fmtFull(d.all_time)],["Metric",metric],["Days tracked",fmtFull((d.series||[]).length)]]);
++}
++
++/* website visitors — compact per-site card (one clear number) */
++function renderWebsite(){
++  const sv=S.data.site_visitors||{};
++  $("#site-grid").innerHTML=SITES.map(s=>{
++    const d=sv[s.host];
++    if(!d)return `<article class="card site-card soon" style="--sc:${s.col}"><div><div class="site-name">${s.name}</div><div class="site-host">${s.host}</div></div><span class="site-big" style="color:var(--faint)">— —</span><span class="site-host">Cloudflare token pending</span></article>`;
++    const est=d.source==="cloudflare",metric=est?"Cloudflare est. · 30d (sampled)":"unique visitors · last 30 days";
++    return `<article class="card site-card" style="--sc:${s.col}"><div><div class="site-name">${s.host}</div><div class="site-host">${s.name}</div></div><span class="site-big">${est?"~":""}<span data-cu="${d.d30}">0</span></span><span class="site-host">${metric}</span></article>`;
++  }).join("");
++  $("#site-grid").querySelectorAll("[data-cu]").forEach(el=>countUp(el,+el.dataset.cu,fmtFull,900));
++  const live=Object.keys(sv).length;
++  $("#sites-sub").textContent=`CreatorGrowth = real unique IPs · AgentFlow/MindFlow = Cloudflare estimate (free Web Analytics samples low-traffic sites) · ${live}/${SITES.length} live`;
++}
++
++/* members tab */
++function renderMembers(){
++  const m=S.data.members;
++  $("#tab-mem-count").textContent=m?`(${fmtFull(m.total_active)})`:"";
++  if(!m){$("#mem-tiles").innerHTML='<div class="empty-note" style="grid-column:1/-1">Auto Tracker not connected — set AIRTABLE_TOKEN.</div>';$("#focus-card").innerHTML="";$("#mem-tbody").innerHTML="";return;}
++  $("#mem-synced").innerHTML=m.pulled_at?`<span class="live-dot"></span>Synced ${m.pulled_at.slice(0,10)}`:"";
++  const tiles=[["Total active",m.total_active,"var(--violet)"],["Paying",m.paying,"var(--green)"],["Free",m.free,"var(--blue)"],["New · 7d",m.new_7d,"var(--cyan)"],["New · 30d",m.new_30d,"var(--red)"]];
++  $("#mem-tiles").innerHTML=tiles.map(([k,v,a])=>`<article class="tile" style="--accent:${a}"><span class="tile-label">${k}</span><span class="tile-num num">${fmtFull(v||0)}</span></article>`).join("");
++  const fx=m.focus||[],fmax=Math.max(1,...fx.map(f=>f[1]));
++  $("#focus-card").innerHTML=fx.length?fx.map(([k,v])=>`<div class="focus-row"><div class="fl" title="${esc(k)}">${esc(k)}</div><div class="ft"><div class="fb" data-w="${(v/fmax*100).toFixed(1)}"></div></div><div class="fv">${fmtFull(v)}</div></div>`).join(""):'<div class="muted" style="padding:4px 2px">No focus answers yet.</div>';
++  requestAnimationFrame(()=>$("#focus-card").querySelectorAll(".fb").forEach(b=>b.style.width=b.dataset.w+"%"));
++  renderMemTable();
++}
++function maskName(n){if(S.memReveal)return n||"—";const p=(n||"").trim().split(/\s+/).filter(Boolean);if(!p.length)return"—";if(p.length<2)return p[0];return `${p[0]} ${p[p.length-1][0]}.`;}
++function maskEmail(e){if(!e)return"";if(S.memReveal)return e;const at=e.indexOf("@");return at<1?"•••":`${e[0]}•••${e.slice(at)}`;}
++function renderMemTable(){
++  const m=S.data.members;if(!m)return;
++  const {key,dir}=S.memSort,q=S.memQuery.toLowerCase();
++  const rows=(m.roster||[]).filter(r=>!q||(`${r.name} ${r.focus}`).toLowerCase().includes(q))
++    .sort((a,b)=>{const av=(a[key]||""),bv=(b[key]||"");return(typeof av==="string"?av.localeCompare(bv):(av-bv))*dir;});
++  $("#roster-sub").textContent=`${rows.length} member${rows.length===1?"":"s"}${q?" matched":""} · from auto-tracker`;
++  $("#mem-tbody").innerHTML=rows.map((r,i)=>`<tr><td class="rank">${i+1}</td><td class="title-cell">${esc(maskName(r.name))}</td><td><span class="st-badge ${ST_CLASS[r.status]||"st-cancelled"}">${esc(r.status||"—")}</span></td><td>${esc(r.focus||"—")}</td><td class="date-cell">${esc((r.joined||"").slice(0,10)||"—")}</td><td class="date-cell">${esc(maskEmail(r.email))}</td></tr>`).join("");
++  document.querySelectorAll("#mem-table th.sortable").forEach(th=>{th.classList.toggle("sorted",th.dataset.key===key);const a=th.querySelector(".arrow");if(a)a.remove();if(th.dataset.key===key)th.insertAdjacentHTML("beforeend",`<span class="arrow">${dir===-1?"▼":"▲"}</span>`);});
++}
++
++/* posting calendar */
++const DOW=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
++function ymLabel(ym){const[y,m]=ym.split("-").map(Number);return `${MONTHS[m-1]} ${y}`;}
++function shiftYM(ym,delta){let[y,m]=ym.split("-").map(Number);m+=delta;while(m<1){m+=12;y--;}while(m>12){m-=12;y++;}return `${y}-${String(m).padStart(2,"0")}`;}
++function monthStats(ym){let n=0,views=0;(S.data.videos||[]).forEach(v=>{if((v.published||"").slice(0,7)===ym){n++;views+=v.views;}});return {n,views};}
++function monthGridHTML(ym){
++  const[Y,Mo]=ym.split("-").map(Number);
++  const byDay={};
++  (S.data.videos||[]).forEach(v=>{if((v.published||"").slice(0,7)===ym){const d=+v.published.slice(8,10);(byDay[d]=byDay[d]||[]).push(v);}});
++  const first=new Date(Y,Mo-1,1).getDay(),days=new Date(Y,Mo,0).getDate(),today=new Date().toISOString().slice(0,10);
++  let cells=DOW.map(d=>`<div class="cal-dow">${d}</div>`).join("");
++  for(let i=0;i<first;i++)cells+='<div class="cal-cell empty"></div>';
++  for(let d=1;d<=days;d++){
++    const vids=byDay[d]||[],dateStr=`${ym}-${String(d).padStart(2,"0")}`,isToday=dateStr===today?" today":"";
++    if(!vids.length){cells+=`<div class="cal-cell${isToday}"><span class="dnum">${d}</span></div>`;continue;}
++    const tot=vids.reduce((a,b)=>a+b.views,0),thumb=vids[0].thumb||`https://i.ytimg.com/vi/${vids[0].id}/mqdefault.jpg`;
++    const tt=vids.map(v=>`${v.title} — ${fmtFull(v.views)} views`).join(" | ");
++    cells+=`<div class="cal-cell has${isToday}" title="${esc(tt)}"><div class="cal-thumb" style="background-image:url('${thumb}')"></div><span class="dnum">${d}</span><span class="cal-badge">${fmtAbbr(tot)}${vids.length>1?` · ${vids.length}`:""}</span></div>`;
++  }
++  return `<div class="cal-grid">${cells}</div>`;
++}
++function renderCalendar(){
++  if(!S.calYM)S.calYM=S.data.this_month||new Date().toISOString().slice(0,7);
++  const ym=S.calYM,[Y,Mo]=ym.split("-").map(Number);
++  const openMonth=(mym)=>{S.calYM=mym;S.calRange="month";$("#cal-range").querySelectorAll(".seg-btn").forEach(x=>x.classList.toggle("active",x.dataset.range==="month"));renderCalendar();};
++  if(S.calRange==="quarter"||S.calRange==="year"){
++    const yr=S.calRange==="year",months=yr?Array.from({length:12},(_,i)=>i+1):[(Math.floor((Mo-1)/3))*3+1].flatMap(s=>[s,s+1,s+2]);
++    let tot=0,h='<div class="cal-months">';
++    for(const mi of months){const mym=`${Y}-${String(mi).padStart(2,"0")}`,s=monthStats(mym);tot+=s.n;h+=`<div class="cal-mini"><h4 data-ym="${mym}">${MONTHS[mi-1]} · ${s.n} vid${s.n===1?"":"s"}${s.views?` · ${fmtAbbr(s.views)}`:""}</h4>${monthGridHTML(mym)}</div>`;}
++    $("#cal-body").innerHTML=h+'</div>';
++    $("#cal-label").textContent=yr?`${Y}`:`Q${Math.floor((Mo-1)/3)+1} ${Y}`;
++    $("#cal-sub").textContent=`${tot} video${tot===1?"":"s"} posted in ${yr?Y:"Q"+(Math.floor((Mo-1)/3)+1)+" "+Y} — click a month title to open it`;
++    $("#cal-body").querySelectorAll("h4[data-ym]").forEach(c=>c.addEventListener("click",()=>openMonth(c.dataset.ym)));
++  }else{
++    $("#cal-body").innerHTML=monthGridHTML(ym);$("#cal-label").textContent=ymLabel(ym);
++    const s=monthStats(ym);$("#cal-sub").textContent=`${s.n} video${s.n===1?"":"s"} posted in ${ymLabel(ym)} — hover a day for views`;
++  }
++}
++function applyHideMode(){
++  const on=S.hide;
++  document.querySelectorAll(".tile.sens .tile-num,.tile.sens .tile-sub").forEach(e=>e.classList.toggle("hidden-val",on));
++  const bc=$("#biz-chart");if(bc)bc.classList.toggle("hidden-val",on);
++  const ns=document.querySelector(".northstar");if(ns)ns.classList.toggle("hidden-val",on);
++}
++
++/* table — YouTube analytics hub: 2025+ long-form, newest first, live views */
++const TABLE_FROM="2025-01-01", SHORT_MAX_SECS=180;
++function renderTable(){
++  const {key,dir}=S.sort,q=S.query.toLowerCase();
++  const base=(S.data.videos||[]).filter(v=>v.id&&v.published>=TABLE_FROM&&(v.duration||0)>=SHORT_MAX_SECS);
++  const rows=base.filter(v=>!q||v.title.toLowerCase().includes(q)).sort((a,b)=>{const av=a[key],bv=b[key];return(typeof av==="string"?av.localeCompare(bv):(av-bv))*dir;});
++  $("#table-sub").textContent=`${rows.length} video${rows.length===1?"":"s"} · 2025+ long-form · ${q?"filtered":"newest first"}`;
++  $("#video-tbody").innerHTML=rows.map((v,i)=>{const thumb=v.thumb||`https://i.ytimg.com/vi/${v.id}/default.jpg`;return `<tr><td class="rank">${i+1}</td><td class="title-cell" title="${esc(v.title)}"><div class="td-title-flex"><img class="tbl-thumb" loading="lazy" src="${thumb}" alt=""><a href="https://youtu.be/${v.id}" target="_blank" rel="noopener">${esc(v.title)}</a></div></td><td class="date-cell">${fmtDate(v.published)}</td><td class="num">${fmtFull(v.views)}</td><td class="num">${chip(v.outlier)}</td><td class="num">${fmtFull(v.likes)}</td><td class="num">${fmtFull(v.comments)}</td></tr>`;}).join("");
++  document.querySelectorAll("#video-table th.sortable").forEach(th=>{th.classList.toggle("sorted",th.dataset.key===key);const a=th.querySelector(".arrow");if(a)a.remove();if(th.dataset.key===key)th.insertAdjacentHTML("beforeend",`<span class="arrow">${dir===-1?"▼":"▲"}</span>`);});
++}
++
++/* pipeline */
++const PIPE_ORDER=["options","sorted","show","best","brief","packaging","script","edited","review","published","archived"];
++const PIPE_TABS=new Set(["options","show","best","brief","packaging","script","edited","review","published","archived"]);
++const PIPE_LABEL={options:"Ideas",sorted:"Sorted",show:"Show",best:"Best",brief:"Brief",packaging:"Packaging",script:"Script",edited:"Edited",review:"Review",published:"Published",archived:"Archived"};
++function renderPipeline(){
++  const pipe=S.data.pipeline||{};const keys=PIPE_ORDER.filter(k=>pipe[k]).concat(Object.keys(pipe).filter(k=>!PIPE_ORDER.includes(k)));
++  const total=keys.reduce((s,k)=>s+pipe[k],0),max=Math.max(1,...keys.map(k=>pipe[k]));
++  $("#pipe-total").textContent=`${fmtFull(total)} cards total`;
++  const f=$("#funnel");f.innerHTML="";
++  // log scale so 1 / 3 / 25 / 616 are all distinguishable (a huge "Ideas" stage
++  // no longer flattens every other bar to a sliver)
++  const lmax=Math.log(max+1);
++  keys.forEach((k,i)=>{const v=pipe[k],w=Math.max(6,(Math.log(v+1)/lmax)*100);const row=document.createElement("a");row.className="fr fr-link"+(k==="published"?" pub":"");row.href=PIPE_TABS.has(k)?`/?tab=${k}`:"/";row.target="_blank";row.rel="noopener";row.title=`Open ${PIPE_LABEL[k]||k} in CreatorGrowth (new tab)`;row.innerHTML=`<div class="fl">${PIPE_LABEL[k]||k}</div><div class="ft"><div class="fb"></div></div><div class="fv">${fmtFull(v)} ›</div>`;f.appendChild(row);requestAnimationFrame(()=>setTimeout(()=>row.querySelector(".fb").style.width=w+"%",i*55));});
++}
++
++let toastTimer;
++function toast(msg){const el=$("#toast");el.textContent=msg;el.hidden=false;requestAnimationFrame(()=>el.classList.add("show"));clearTimeout(toastTimer);toastTimer=setTimeout(()=>{el.classList.remove("show");setTimeout(()=>el.hidden=true,350);},4000);}
++function setupReveals(){const io=new IntersectionObserver((es)=>{es.forEach(e=>{if(e.isIntersecting){e.target.classList.add("in");io.unobserve(e.target);}});},{threshold:0.06});document.querySelectorAll(".reveal").forEach(el=>io.observe(el));}
++
++function renderAll(){renderHero();renderTopStrip();renderOverview();renderCalendar();renderPipeline();renderBiz();renderWebsite();renderWebsiteOverview();renderTable();renderMembers();applyHideMode();
++  const sa=S.data.synced_at;$("#sync-label").textContent=sa?`Synced ${sa.slice(0,10)}`:"Synced";}
++
++// Re-render only when the meaningful data actually changes — otherwise the 45s
++// auto-poll re-animates every chart/bar ("twitchy, keeps going on and on").
++async function load(force){
++  const r=await fetch("/api/dashboard",{credentials:"same-origin"});
++  if(!r.ok)throw new Error("HTTP "+r.status);
++  const d=await r.json();
++  const sig=JSON.stringify({c:d.channel,mr:d.monthly_real,w:d.windows,k:(d.kpi||{}).latest,
++    me:d.members&&[d.members.total_active,d.members.paying,d.members.new_7d,(d.members.roster||[]).length],
++    g:d.github,sv:d.site_visitors,pi:d.pipeline,ar:Object.keys(d.archive||{}).length,vn:(d.videos||[]).length});
++  S.data=d;
++  if(force||sig!==S.lastSig){S.lastSig=sig;renderAll();}
++  else{const sa=d.synced_at;$("#sync-label").textContent=sa?`Synced ${sa.slice(0,10)}`:"Synced";}
++}
++
++async function doRefresh(){
++  const btn=$("#refresh");btn.disabled=true;btn.classList.add("loading");
++  try{
++    const r=await fetch("/api/dashboard/refresh",{method:"POST",credentials:"same-origin"});
++    if(!r.ok)throw new Error("HTTP "+r.status);
++    const res=await r.json();S.data=res.data;renderAll();
++    const got=[res.youtube&&"YouTube",res.instagram&&"Instagram",res.facebook&&"Facebook"].filter(Boolean);
++    toast(got.length?`Refreshed live: ${got.join(", ")}${res.video_sync?" · pulling new videos…":""}`:"Refresh ran — no new platform data available.");
++  }catch(e){toast("Refresh failed — "+e.message);}
++  finally{btn.disabled=false;btn.classList.remove("loading");}
++}
++
++async function init(){
++  try{await load(true);setupReveals();}
++  catch(e){document.querySelector("main").insertAdjacentHTML("afterbegin",`<div class="empty-note" style="margin-bottom:20px">Couldn’t load dashboard (${e.message}). Are you signed in as admin?</div>`);return;}
++  $("#refresh").addEventListener("click",doRefresh);
++  $("#site-modes").addEventListener("click",(e)=>{const b=e.target.closest(".seg-btn");if(!b||b.classList.contains("active"))return;S.siteMode=b.dataset.site;renderWebsiteOverview();});
++  $("#mem-reveal").addEventListener("click",()=>{S.memReveal=!S.memReveal;const b=$("#mem-reveal");b.classList.toggle("on",S.memReveal);b.textContent=S.memReveal?"👁 Emails shown":"🙈 Emails masked";renderMemTable();});
++  $("#search").addEventListener("input",(e)=>{S.query=e.target.value;renderTable();});
++  document.querySelectorAll("#video-table th.sortable").forEach(th=>th.addEventListener("click",()=>{const k=th.dataset.key;S.sort=k===S.sort.key?{key:k,dir:-S.sort.dir}:{key:k,dir:(k==="title"||k==="published")?1:-1};renderTable();}));
++  $("#ov-window").addEventListener("click",(e)=>{const b=e.target.closest(".seg-btn");if(!b||b.classList.contains("active"))return;$("#ov-window").querySelectorAll(".seg-btn").forEach(x=>x.classList.remove("active"));b.classList.add("active");S.ovWindow=b.dataset.win;renderOverview();});
++  $("#ov-modes").addEventListener("click",(e)=>{const b=e.target.closest(".seg-btn");if(!b||b.classList.contains("active"))return;$("#ov-modes").querySelectorAll(".seg-btn").forEach(x=>x.classList.remove("active"));b.classList.add("active");S.ovMode=b.dataset.mode;
++    // modes are monthly-only → snap window back to All so the line is visible
++    if(S.ovWindow!=="all"){S.ovWindow="all";$("#ov-window").querySelectorAll(".seg-btn").forEach(x=>x.classList.toggle("active",x.dataset.win==="all"));}
++    renderOverview();});
++  const calStep=()=>S.calRange==="year"?12:S.calRange==="quarter"?3:1;
++  $("#cal-prev").addEventListener("click",()=>{S.calYM=shiftYM(S.calYM||S.data.this_month,-calStep());renderCalendar();});
++  $("#cal-next").addEventListener("click",()=>{S.calYM=shiftYM(S.calYM||S.data.this_month,calStep());renderCalendar();});
++  $("#cal-range").addEventListener("click",(e)=>{const b=e.target.closest(".seg-btn");if(!b||b.classList.contains("active"))return;$("#cal-range").querySelectorAll(".seg-btn").forEach(x=>x.classList.remove("active"));b.classList.add("active");S.calRange=b.dataset.range;renderCalendar();});
++  // hide mode (filming) — blur MRR + retention + revenue
++  const hb=$("#hide-toggle");hb.classList.toggle("on",S.hide);hb.textContent=S.hide?"🙈 Hidden":"🙈 Hide $";
++  hb.addEventListener("click",()=>{S.hide=!S.hide;localStorage.setItem("cg_hide",S.hide?"1":"0");hb.classList.toggle("on",S.hide);hb.textContent=S.hide?"🙈 Hidden":"🙈 Hide $";applyHideMode();});
++  $("#biz-modes").addEventListener("click",(e)=>{const b=e.target.closest(".seg-btn");if(!b||b.classList.contains("active"))return;$("#biz-modes").querySelectorAll(".seg-btn").forEach(x=>x.classList.remove("active"));b.classList.add("active");S.bizMode=b.dataset.mode;renderBiz();});
++  // tab switching
++  document.querySelector(".tabs").addEventListener("click",(e)=>{const b=e.target.closest(".tab");if(!b)return;S.tab=b.dataset.tab;document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x===b));$("#tab-intel").hidden=S.tab!=="intel";$("#tab-members").hidden=S.tab!=="members";document.querySelector("#tab-"+S.tab).querySelectorAll(".reveal").forEach(el=>el.classList.add("in"));if(S.tab==="intel"){renderOverview();renderBiz();}else renderMembers();});
++  // members tab interactions
++  $("#mem-search").addEventListener("input",(e)=>{S.memQuery=e.target.value;renderMemTable();});
++  document.querySelectorAll("#mem-table th.sortable").forEach(th=>th.addEventListener("click",()=>{const k=th.dataset.key;S.memSort=k===S.memSort.key?{key:k,dir:-S.memSort.dir}:{key:k,dir:1};renderMemTable();}));
++  let rt;window.addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(()=>{renderOverview();renderBiz();},180);});
++  setInterval(()=>{load().catch(()=>{});},45000);
++}
++init();
++</script>
++</body>
++</html>
