@@ -63,6 +63,24 @@ your own codebase.
 | 20 | [AI Mate OS dashboard](ship-or-skip-ep1/20-ai-mate-os/PROMPT.md) | Flask everything-dashboard | `pip install -r requirements.txt && python app.py` |
 | 21 | [Send-to-CreatorGrowth](ship-or-skip-ep1/21-send-to-creatorgrowth/PROMPT.md) | patch + tests (private SaaS) | apply to your own app |
 
+### fusion vs opus 4.8 — Same 6 Prompts, Two Models, Head to Head
+**Watch: (video coming — link lands here at publish)**
+
+Same six one-shot prompts fired at **two** models at once — `openrouter/fusion`
+(a multi-model composite: panel of models + web search, then synthesized) vs
+`anthropic/claude-opus-4.8` (a single frontier model) — captured with cost,
+latency, and the unedited builds, then judged side by side. All self-contained,
+single-file builds.
+
+| # | Prompt | What it is |
+|---|--------|------------|
+| 22 | [GTA v2](fusion-vs-opus-4.8/22-gta-v2/PROMPT.md) | top-down open-world game **with weapons**, one HTML file |
+| 23 | [The internet in 1999](fusion-vs-opus-4.8/23-internet-1999/PROMPT.md) | dial-up boot + a browsable '90s web, one HTML file |
+| 24 | [Pixel Synth](fusion-vs-opus-4.8/24-pixel-synth/PROMPT.md) | FL Studio-style 8-bit chiptune looper, Web Audio |
+| 25 | [Flight Sim](fusion-vs-opus-4.8/25-flight-sim/PROMPT.md) | 3D jet + air combat, one HTML file (CDN three.js ok) |
+| 26 | [Destruction Sandbox](fusion-vs-opus-4.8/26-destruction-sandbox/PROMPT.md) | physics mayhem playground (CDN Matter.js ok) |
+| 27 | [Productivity Hub](fusion-vs-opus-4.8/27-productivity-hub/PROMPT.md) | Kanban + calendar + to-do + Pomodoro, one HTML file |
+
 ## Rules every episode runs under
 
 - **One shot each** — no back-and-forth, no retries.
