@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D Human Anatomy</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%; height:100%; overflow:hidden; color:#e8e8f0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: radial-gradient(circle at 50% 22%, #1c1f30 0%, #0b0c13 72%);
+  }
+  #app { position:fixed; inset:0; }
+  #app canvas { display:block; }
+
+  #panel {
+    position:fixed; top:18px; left:18px; z-index:5; pointer-events:none;
+    background:rgba(16,18,28,0.55); border:1px solid rgba(255,255,255,0.09);
+    -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+    padding:14px 16px; border-radius:12px;
+  }
+  #panel .title { font-size:18px; font-weight:700; letter-spacing:0.3px; }
+  #panel .hint { margin-top:6px; font-size:12.5px; line-height:1.55; color:#aab0c0; }
+  #panel .hint b { color:#ffb866; font-weight:600; }
+
+  #label {
+    position:fixed; transform:translate(-50%,-135%); display:none; z-index:10;
+    pointer-events:none; background:rgba(18,20,30,0.94);
+    border:1px solid rgba(255,150,60,0.45); padding:8px 12px; border-radius:10px;
+    max-width:255px; box-shadow:0 8px 24px rgba(0,0,0,0.55);
+  }
+  #label .n { font-weight:700; color:#ffb866; font-size:13.5px; }
+  #label .d { color:#c8ccd6; font-size:12px; margin-top:3px; line-height:1.4; }
+
+  #err {
+    display:none; position:fixed; inset:0; z-index:20; padding:30px;
+    align-items:center; justify-content:center; text-align:center;
+    font-size:15px; color:#ffb866; background:rgba(8,9,14,0.92);
+  }
+</style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="panel">
+    <div class="title">3D Human Anatomy</div>
+    <div class="hint">
+      <b>Drag</b> to rotate · <b>Scroll</b> to zoom<br>
+      Hover a muscle to identify it<br>
+      <span id="mc"></span>
+    </div>
+  </div>
+  <div id="label"></div>
+  <div id="err">Could not load three.js. This page needs an internet connection to fetch the library from a CDN. Check your connection and reload.</div>
+
+  <script>
+    // If the module below never signals ready, the library failed to load (offline CDN).
+    setTimeout(() => { if (!window.__anatomyReady) document.getElementById('err').style.display = 'flex'; }, 3500);
+  </script>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+  import * as THREE from 'three';
+  import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+  // Short anatomical descriptions shown in the hover label.
+  const DESC = {
+    "Pectoralis Major": "Large fan-shaped chest muscle; flexes and adducts the arm.",
+    "Deltoid": "Shoulder muscle; abducts the arm in all directions.",
+    "Biceps Brachii": "Front of the upper arm; flexes the elbow, supinates the forearm.",
+    "Triceps Brachii": "Back of the upper arm; extends the elbow.",
+    "Forearm Flexors": "Front forearm group; flex the wrist and fingers.",
+    "Forearm Extensors": "Back forearm group; extend the wrist and fingers.",
+    "Rectus Abdominis": "The 'six-pack'; flexes the trunk and stabilizes the core.",
+    "External Oblique": "Side of the abdomen; rotates and laterally flexes the trunk.",
+    "Trapezius": "Upper back and neck; moves and stabilizes the scapula.",
+    "Latissimus Dorsi": "Broad back muscle; extends, adducts and rotates the arm.",
+    "Erector Spinae": "Deep spinal extensors that keep the trunk upright.",
+    "Gluteus Maximus": "Largest buttock muscle; extends and externally rotates the hip.",
+    "Quadriceps": "Front thigh group; extends the knee.",
+    "Hamstrings": "Back thigh group; flex the knee and extend the hip.",
+    "Hip Adductors": "Inner thigh group; adduct the hip.",
+    "Gastrocnemius": "Main calf muscle; plantarflexes the foot.",
+    "Tibialis Anterior": "Front of the shin; dorsiflexes the foot.",
+    "Sternocleidomastoid": "Neck muscle that turns and flexes the head."
+  };
+
+  const HIGHLIGHT = 0xff5a1e;
+
+  // ---------- renderer / scene / camera ----------
+  const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  document.getElementById('app').appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+
+  const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 100);
+  camera.position.set(0, 0.6, 6.2);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.enablePan = false;
+  controls.minDistance = 2.8;
+  controls.maxDistance = 14;
+  controls.target.set(0, 0.15, 0);
+
+  // ---------- lights ----------
+  scene.add(new THREE.HemisphereLight(0x9fb4ff, 0x402a2a, 0.7));
+  const key = new THREE.DirectionalLight(0xffffff, 1.5);
+  key.position.set(4, 7, 5);
+  key.castShadow = true;
+  key.shadow.mapSize.set(2048, 2048);
+  key.shadow.camera.near = 0.5; key.shadow.camera.far = 25;
+  key.shadow.camera.left = -4; key.shadow.camera.right = 4;
+  key.shadow.camera.top = 5; key.shadow.camera.bottom = -4;
+  key.shadow.bias = -0.0004;
+  scene.add(key);
+  const rim = new THREE.DirectionalLight(0x88aaff, 0.6);
+  rim.position.set(-5, 3, -6);
+  scene.add(rim);
+
+  // shadow-catching ground
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(7, 48), new THREE.ShadowMaterial({ opacity:0.4 }));
+  ground.rotation.x = -Math.PI/2;
+  ground.position.y = -2.0;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // ---------- materials ----------
+  const boneMat = new THREE.MeshStandardMaterial({ color:0xe9dcc2, roughness:0.85, metalness:0.0 });
+  function muscleMat() {
+    return new THREE.MeshStandardMaterial({ color:0xa8362f, roughness:0.5, metalness:0.0, emissive:0x000000, emissiveIntensity:0.0 });
+  }
+
+  // ---------- builders ----------
+  const figure = new THREE.Group();
+  scene.add(figure);
+  const interactive = [];   // only muscle meshes — raycast targets
+
+  const baseKey = (name) => name.replace(/ \((Left|Right)\)$/, '');
+
+  function addMuscle(mesh, name) {
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    mesh.userData = { muscle:true, name, key: baseKey(name) };
+    interactive.push(mesh);
+    figure.add(mesh);
+    return mesh;
+  }
+  function addBone(mesh) {
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    figure.add(mesh);
+    return mesh;
+  }
+
+  // muscle oriented along a->b
+  function capsule(name, a, b, r) {
+    const dir = new THREE.Vector3().subVectors(b, a);
+    const len = Math.max(0.02, dir.length());
+    const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 8, 16), muscleMat());
+    m.position.copy(a).add(b).multiplyScalar(0.5);
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir.normalize());
+    return addMuscle(m, name);
+  }
+  function ball(name, r, pos, scale) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 18), muscleMat());
+    m.position.copy(pos);
+    if (scale) m.scale.set(scale[0], scale[1], scale[2]);
+    return addMuscle(m, name);
+  }
+  function box(name, size, pos) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), muscleMat());
+    m.position.copy(pos);
+    return addMuscle(m, name);
+  }
+  function boneBall(r, pos, scale) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 16), boneMat);
+    m.position.copy(pos);
+    if (scale) m.scale.set(scale[0], scale[1], scale[2]);
+    return addBone(m);
+  }
+  function boneBox(size, pos) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), boneMat);
+    m.position.copy(pos);
+    return addBone(m);
+  }
+  function boneCapsule(a, b, r) {
+    const dir = new THREE.Vector3().subVectors(b, a);
+    const len = Math.max(0.02, dir.length());
+    const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 6, 12), boneMat);
+    m.position.copy(a).add(b).multiplyScalar(0.5);
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir.normalize());
+    return addBone(m);
+  }
+
+  // ---------- build the figure ----------
+  function build() {
+    // core torso (bone) — a lathed, flattened column
+    const prof = [
+      new THREE.Vector2(0.10, 0.45),
+      new THREE.Vector2(0.24, 0.55),
+      new THREE.Vector2(0.27, 0.78),
+      new THREE.Vector2(0.31, 1.05),
+      new THREE.Vector2(0.33, 1.25),
+      new THREE.Vector2(0.29, 1.42),
+      new THREE.Vector2(0.16, 1.50)
+    ];
+    const torso = new THREE.Mesh(new THREE.LatheGeometry(prof, 30), boneMat);
+    torso.scale.z = 0.8;
+    addBone(torso);
+
+    boneBall(0.26, new THREE.Vector3(0, 0.26, 0), [1.15, 0.8, 0.9]);      // pelvis
+    boneBall(0.16, new THREE.Vector3(0, 1.93, 0), [1.0, 1.12, 1.03]);     // skull
+    boneBox([0.13, 0.12, 0.14], new THREE.Vector3(0, 1.78, 0.02));        // jaw
+    boneCapsule(new THREE.Vector3(0, 1.50, 0), new THREE.Vector3(0, 1.72, 0), 0.072); // neck
+
+    // central muscles
+    box("Rectus Abdominis", [0.26, 0.55, 0.14], new THREE.Vector3(0, 0.82, 0.20));
+    ball("Trapezius", 0.50, new THREE.Vector3(0, 1.42, -0.14), [1.40, 0.62, 0.32]);
+    ball("Latissimus Dorsi", 0.50, new THREE.Vector3(0, 0.95, -0.16), [1.24, 1.00, 0.28]);
+
+    // paired (left + right) muscles
+    for (const s of [+1, -1]) {
+      const side = s > 0 ? 'Right' : 'Left';
+      const x = (v) => s * v;
+
+      // chest / shoulder
+      ball(`Pectoralis Major (${side})`, 0.16, new THREE.Vector3(x(0.16), 1.20, 0.20), [1.60, 1.40, 0.75]);
+      ball(`Deltoid (${side})`, 0.17, new THREE.Vector3(x(0.50), 1.36, 0.00), [1.00, 1.06, 0.96]);
+
+      // arm
+      capsule(`Biceps Brachii (${side})`, new THREE.Vector3(x(0.50), 1.34, 0.045), new THREE.Vector3(x(0.56), 0.82, 0.045), 0.078);
+      capsule(`Triceps Brachii (${side})`, new THREE.Vector3(x(0.50), 1.34, -0.050), new THREE.Vector3(x(0.56), 0.82, -0.050), 0.078);
+      capsule(`Forearm Flexors (${side})`, new THREE.Vector3(x(0.56), 0.80, 0.030), new THREE.Vector3(x(0.62), 0.32, 0.030), 0.066);
+      capsule(`Forearm Extensors (${side})`, new THREE.Vector3(x(0.56), 0.80, -0.035), new THREE.Vector3(x(0.62), 0.32, -0.035), 0.066);
+      boneBall(0.05, new THREE.Vector3(x(0.56), 0.80, 0));                  // elbow
+      boneBox([0.09, 0.17, 0.045], new THREE.Vector3(x(0.63), 0.22, 0));    // hand
+
+      // abdomen side
+      box(`External Oblique (${side})`, [0.13, 0.50, 0.20], new THREE.Vector3(x(0.28), 0.82, 0.04));
+
+      // back
+      capsule(`Erector Spinae (${side})`, new THREE.Vector3(x(0.07), 0.55, -0.18), new THREE.Vector3(x(0.07), 1.15, -0.15), 0.050);
+      ball(`Gluteus Maximus (${side})`, 0.20, new THREE.Vector3(x(0.16), 0.02, -0.12), [1.00, 0.90, 0.90]);
+
+      // leg
+      capsule(`Quadriceps (${side})`, new THREE.Vector3(x(0.18), 0.05, 0.06), new THREE.Vector3(x(0.19), -1.00, 0.05), 0.120);
+      capsule(`Hamstrings (${side})`, new THREE.Vector3(x(0.18), 0.05, -0.06), new THREE.Vector3(x(0.19), -1.00, -0.06), 0.105);
+      capsule(`Hip Adductors (${side})`, new THREE.Vector3(x(0.12), 0.00, 0.00), new THREE.Vector3(x(0.13), -0.80, 0.00), 0.052);
+      boneBall(0.10, new THREE.Vector3(x(0.19), -1.00, 0.0));               // knee
+      capsule(`Gastrocnemius (${side})`, new THREE.Vector3(x(0.19), -1.00, -0.04), new THREE.Vector3(x(0.20), -1.72, -0.07), 0.092);
+      capsule(`Tibialis Anterior (${side})`, new THREE.Vector3(x(0.19), -1.00, 0.07), new THREE.Vector3(x(0.20), -1.80, 0.05), 0.070);
+      boneBox([0.13, 0.06, 0.30], new THREE.Vector3(x(0.20), -1.95, 0.10)); // foot
+
+      // neck
+      capsule(`Sternocleidomastoid (${side})`, new THREE.Vector3(x(0.11), 1.78, 0.00), new THREE.Vector3(x(0.05), 1.50, 0.07), 0.032);
+    }
+  }
+  build();
+  document.getElementById('mc').textContent = `${interactive.length} muscles · generated in code`;
+
+  // ---------- hover / label ----------
+  const label = document.getElementById('label');
+  const raycaster = new THREE.Raycaster();
+  const pointer = new THREE.Vector2(-2, -2);
+  let hovered = null;
+  const hoverPoint = new THREE.Vector3();
+
+  addEventListener('pointermove', (e) => {
+    pointer.x = (e.clientX / innerWidth) * 2 - 1;
+    pointer.y = -(e.clientY / innerHeight) * 2 + 1;
+  });
+  renderer.domElement.addEventListener('pointerleave', () => pointer.set(-2, -2));
+
+  function updateHover() {
+    raycaster.setFromCamera(pointer, camera);
+    const hits = raycaster.intersectObjects(interactive, false);
+    if (hits.length) {
+      const obj = hits[0].object;
+      hoverPoint.copy(hits[0].point);
+      if (obj !== hovered) {
+        if (hovered) { hovered.material.emissive.setHex(0x000000); hovered.material.emissiveIntensity = 0; }
+        hovered = obj;
+        hovered.material.emissive.setHex(HIGHLIGHT);
+        const d = DESC[hovered.userData.key] || '';
+        label.innerHTML = `<div class="n">${hovered.userData.name}</div><div class="d">${d}</div>`;
+        label.style.display = 'block';
+      }
+      document.body.style.cursor = 'pointer';
+    } else if (hovered) {
+      hovered.material.emissive.setHex(0x000000);
+      hovered.material.emissiveIntensity = 0;
+      hovered = null;
+      label.style.display = 'none';
+      document.body.style.cursor = '';
+    }
+  }
+
+  // ---------- render loop ----------
+  const clock = new THREE.Clock();
+  function animate() {
+    requestAnimationFrame(animate);
+    const t = clock.getElapsedTime();
+    updateHover();
+    if (hovered) {
+      hovered.material.emissiveIntensity = 0.65 + 0.3 * Math.sin(t * 6);   // gentle glow pulse
+      const v = hoverPoint.clone().project(camera);
+      label.style.left = ((v.x * 0.5 + 0.5) * innerWidth) + 'px';
+      label.style.top  = ((-v.y * 0.5 + 0.5) * innerHeight) + 'px';
+    }
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  addEventListener('resize', () => {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+
+  window.__anatomyReady = true;
+  </script>
+</body>
+</html>

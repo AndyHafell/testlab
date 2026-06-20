@@ -1,0 +1,756 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Video Factory</title>
+<style>
+  :root{
+    --bg:#0b0d12; --panel:#14171f; --panel2:#1b1f2a; --line:#272c3a;
+    --txt:#e7eaf0; --mut:#8b93a7; --cyan:#22d3ee; --cyan2:#67e8f9;
+    --keep:#34d399; --skip:#fb7185; --gold:#fbbf24;
+    --r:14px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:radial-gradient(1200px 800px at 80% -10%,#161a26 0,#0b0d12 60%) fixed;
+    color:var(--txt); font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    overflow:hidden;
+  }
+  button{font:inherit; color:inherit; cursor:pointer; border:0; background:none}
+  .btn{
+    display:inline-flex; align-items:center; gap:8px; padding:9px 14px; border-radius:10px;
+    background:var(--panel2); border:1px solid var(--line); color:var(--txt); transition:.15s;
+  }
+  .btn:hover{border-color:#3a4256; background:#222737}
+  .btn:disabled{opacity:.45; cursor:not-allowed}
+  .btn.primary{background:linear-gradient(180deg,#1e6f86,#0e566c); border-color:#2a8aa3; color:#eafcff}
+  .btn.keep{background:linear-gradient(180deg,#1c6b4f,#0f5138); border-color:#278463; color:#e6fff4}
+  .btn.skip{background:linear-gradient(180deg,#6b2435,#4f1220); border-color:#84314a; color:#ffe9ee}
+  .btn.ghost{background:transparent}
+  .btn.big{padding:13px 22px; font-size:16px; font-weight:700; border-radius:14px}
+
+  /* Top bar */
+  .topbar{
+    display:flex; align-items:center; gap:16px; padding:12px 18px;
+    border-bottom:1px solid var(--line); background:rgba(10,12,17,.7); backdrop-filter:blur(8px);
+  }
+  .brand{font-weight:800; font-size:17px; letter-spacing:.3px}
+  .brand .dot{color:var(--cyan)}
+  .topbar-actions{margin-left:auto; display:flex; align-items:center; gap:10px}
+  .status{color:var(--mut); font-size:13px; max-width:260px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .status.ok{color:var(--keep)} .status.warn{color:var(--gold)}
+
+  /* Layout */
+  .layout{display:flex; height:calc(100% - 58px)}
+  .deck-wrap{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:20px; position:relative; min-width:0}
+  .hintbar{position:absolute; top:14px; left:0; right:0; text-align:center; color:var(--mut); font-size:13px; pointer-events:none}
+
+  .deck{position:relative; width:min(440px,86vw); height:min(560px,72vh); perspective:1200px}
+  .card{
+    position:absolute; inset:0; border-radius:22px; overflow:hidden; background:#000;
+    box-shadow:0 24px 60px rgba(0,0,0,.55); touch-action:none; will-change:transform;
+    transform-origin:center bottom;
+  }
+  .card video{width:100%; height:100%; object-fit:cover; display:block; background:#000}
+  .card .grad{position:absolute; left:0; right:0; bottom:0; height:55%;
+    background:linear-gradient(180deg,transparent,rgba(0,0,0,.85))}
+  .card .info{position:absolute; left:0; right:0; bottom:0; padding:16px 18px}
+  .ci-author{font-weight:800; font-size:18px}
+  .ci-handle{color:var(--cyan); font-size:14px; font-weight:600}
+  .ci-stats{color:#cfd6e4; font-size:12.5px; margin-top:6px; display:flex; gap:10px; flex-wrap:wrap}
+  .ci-text{color:#aeb6c8; font-size:13px; margin-top:8px; max-height:64px; overflow:hidden;
+    display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical}
+  .hint{position:absolute; top:20px; font-weight:900; font-size:26px; padding:7px 15px; border-radius:12px;
+    border:4px solid; opacity:0; transition:opacity .1s; letter-spacing:1px}
+  .hint.like{right:20px; color:var(--keep); border-color:var(--keep); transform:rotate(8deg)}
+  .hint.nope{left:20px; color:var(--skip); border-color:var(--skip); transform:rotate(-8deg)}
+  .card.like .hint.like,.card.nope .hint.nope{opacity:1}
+
+  .actions{display:flex; align-items:center; gap:14px; margin-top:22px}
+  .counter{margin-top:12px; color:var(--mut); font-size:13px}
+
+  .empty{text-align:center; color:var(--mut); max-width:380px}
+  .empty h2{color:var(--txt); font-size:22px; margin:0 0 8px}
+  .empty .big-num{font-size:46px; font-weight:800; color:var(--cyan); margin:6px 0}
+  .empty .row{display:flex; gap:10px; justify-content:center; margin-top:18px}
+
+  /* Queue */
+  .queue{width:330px; border-left:1px solid var(--line); background:rgba(13,15,21,.6);
+    display:flex; flex-direction:column; min-height:0}
+  .queue-head{display:flex; align-items:center; gap:10px; padding:14px 16px; border-bottom:1px solid var(--line)}
+  .queue-head h2{margin:0; font-size:15px; letter-spacing:.4px; color:var(--mut); text-transform:uppercase}
+  .queue-head h2 span{color:var(--cyan); font-weight:800}
+  .queue-head .btn{margin-left:auto; padding:7px 11px; font-size:13px}
+  .queue-list{overflow:auto; flex:1; padding:10px; display:flex; flex-direction:column; gap:8px}
+  .qitem{display:flex; gap:10px; padding:8px; border-radius:12px; background:var(--panel); border:1px solid var(--line); cursor:pointer; transition:.12s}
+  .qitem:hover{border-color:#3a4256; background:var(--panel2)}
+  .qitem img{width:64px; height:42px; object-fit:cover; border-radius:7px; background:#000; flex:none}
+  .qi-meta{min-width:0; flex:1}
+  .qi-author{font-weight:700; font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .qi-author span{color:var(--cyan); font-weight:600; font-size:12px}
+  .qi-stats{color:var(--mut); font-size:11.5px; margin-top:2px}
+  .qi-exported{font-size:11px; color:var(--keep); margin-top:2px}
+  .empty-q{color:var(--mut); font-size:13px; padding:18px; text-align:center}
+  .exports{border-top:1px solid var(--line); padding:10px 12px; max-height:170px; overflow:auto}
+  .exports h3{margin:0 0 6px; font-size:11px; letter-spacing:.5px; color:var(--mut); text-transform:uppercase}
+  .exp-item{display:flex; gap:8px; align-items:center; font-size:12.5px; padding:4px 0; color:#cdd4e2}
+  .exp-item a{color:var(--cyan2); text-decoration:none; margin-left:auto}
+  .exp-item a:hover{text-decoration:underline}
+
+  /* Modal */
+  .modal{position:fixed; inset:0; background:rgba(4,6,10,.82); backdrop-filter:blur(6px);
+    display:flex; align-items:center; justify-content:center; z-index:50; padding:20px}
+  .modal[hidden]{display:none}
+  .modal-card{background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:16px;
+    width:min(960px,96vw); max-height:96vh; overflow:auto; box-shadow:0 30px 80px rgba(0,0,0,.6)}
+  .modal-head{display:flex; align-items:center; gap:10px; margin-bottom:12px}
+  .modal-head .t{font-weight:700; font-size:15px}
+  .modal-head .t span{color:var(--cyan); font-weight:600}
+  .modal-head .close{margin-left:auto}
+  #canvas{width:100%; height:auto; border-radius:12px; background:#000; display:block; border:1px solid var(--line)}
+  .modal-actions{display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-top:12px}
+  .modal-actions .status{margin-left:auto}
+
+  @media (max-width:820px){
+    .layout{flex-direction:column}
+    .queue{width:100%; height:240px; border-left:0; border-top:1px solid var(--line)}
+  }
+</style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">🎬 Video<span class="dot">Factory</span></div>
+    <div class="topbar-actions">
+      <span id="globalStatus" class="status"></span>
+      <label class="btn">🎵 Load music<input id="musicInput" type="file" accept="audio/*" hidden /></label>
+      <label class="btn ghost">📂 Load JSON<input id="jsonInput" type="file" accept="application/json,.json" hidden /></label>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="deck-wrap">
+      <div class="hintbar">Drag cards right to <b style="color:var(--keep)">keep</b> · left to <b style="color:var(--skip)">skip</b> · click a kept post to preview &amp; export .webm</div>
+      <div id="deck" class="deck"></div>
+      <div id="emptyState" class="empty" hidden>
+        <h2>All swiped</h2>
+        <div class="big-num" id="emptyKept">0</div>
+        <div>kept · ready to render</div>
+        <div class="row">
+          <button id="exportAllEmpty" class="btn keep big">⬇ Export all kept</button>
+          <button id="restart" class="btn ghost big">↺ Restart</button>
+        </div>
+      </div>
+      <div class="actions" id="actions">
+        <button id="skipBtn" class="btn skip big">✕ Skip</button>
+        <button id="undoBtn" class="btn ghost big">↶ Undo</button>
+        <button id="keepBtn" class="btn keep big">♥ Keep</button>
+      </div>
+      <div id="counter" class="counter"></div>
+    </section>
+
+    <aside class="queue">
+      <div class="queue-head">
+        <h2>Kept <span id="keptCount">0</span></h2>
+        <button id="exportAllBtn" class="btn">⬇ Export all</button>
+      </div>
+      <div id="queueList" class="queue-list"></div>
+      <div id="exports" class="exports" hidden>
+        <h3>Exports</h3>
+        <div id="exportsList"></div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Preview / export modal -->
+  <div id="modal" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <div class="t" id="modalTitle"></div>
+        <button id="modalClose" class="btn ghost close">✕</button>
+      </div>
+      <canvas id="canvas" width="1280" height="720"></canvas>
+      <div class="modal-actions">
+        <button id="playBtn" class="btn primary">▶ Preview</button>
+        <button id="exportBtn" class="btn keep">⬇ Export .webm</button>
+        <label class="btn ghost">📁 Use local video<input id="localVideoInput" type="file" accept="video/*" hidden /></label>
+        <span id="exportStatus" class="status"></span>
+      </div>
+    </div>
+  </div>
+
+<script>
+"use strict";
+/* ------------------------------------------------------------------ *
+ *  VIDEO FACTORY — single-file. Loads x_ideas.json, Tinder-swipes,
+ *  composites source video + handle chip + word-by-word cyan captions
+ *  + your music, and exports the preview as .webm.
+ * ------------------------------------------------------------------ */
+
+/* Inlined copy of the staged x_ideas.json so the app also works from
+ * file:// (where fetch of a local file is blocked by browsers). When
+ * served over http, the live x_ideas.json is fetched first. */
+const FALLBACK_IDEAS = [
+  {
+    "handle": "Amank1412",
+    "author": "Aman",
+    "text": "SOMEONE JUST RAN LLAMA 70B LOCALLY ON A MACBOOK FOR 11 HOURS ON A FLIGHT.\n\nno wifi. no API. no subscriptions. cleared his entire client queue before landing.\n\nlocal AI is not a hobby anymore.￼",
+    "url": "https://x.com/Amank1412/status/2050203741627040250",
+    "video_url": "https://video.twimg.com/amplify_video/2050203677772898304/vid/avc1/1280x720/boda1Larl2SPyp5m.mp4?tag=27",
+    "thumbnail": "https://pbs.twimg.com/amplify_video_thumb/2050203677772898304/img/bC9DRdTrnlzxR4Pq.jpg",
+    "views": 999572,
+    "likes": 9059,
+    "retweets": 247,
+    "score": 8
+  },
+  {
+    "handle": "claudeai",
+    "author": "Claude",
+    "text": "New in Claude Code: Artifacts.\n\nInteractive pages built from your session, like a PR walkthrough or a living project dashboard, shared with your team at a private link.\n\nAvailable in beta on Team and Enterprise plans.",
+    "url": "https://x.com/claudeai/status/2067671912038240487",
+    "video_url": "https://video.twimg.com/amplify_video/2067666542905405441/vid/avc1/1920x1080/nMl0YMtfhPxf3e24.mp4?tag=28",
+    "thumbnail": "https://pbs.twimg.com/media/HLHZhd5WsAAzjSC.jpg",
+    "views": 2016855,
+    "likes": 11611,
+    "retweets": 764,
+    "score": 8
+  },
+  {
+    "handle": "Marcos12345rico",
+    "author": "Marcos Rico Peng",
+    "text": "today we're launching  @Palmier_io, a video editor Claude can edit.\n\nuse AI to edit, organize, and generate footage directly in the timeline.\n\nfinally, a video editor built for AI.\n\nopen-source. mac native. available now.",
+    "url": "https://x.com/Marcos12345rico/status/2067264877463261400",
+    "video_url": "https://video.twimg.com/amplify_video/2067264562789756928/vid/avc1/3840x2160/FV-nUE5XvJMuUoC-.mp4?tag=28",
+    "thumbnail": "https://pbs.twimg.com/amplify_video_thumb/2067264562789756928/img/Mh8xaTd5nCpiqq2B.jpg",
+    "views": 2098516,
+    "likes": 11076,
+    "retweets": 795,
+    "score": 8
+  }
+];
+
+const W = 1280, H = 720;          // composite canvas size (16:9)
+const SWIPE_THRESH = 120;          // px past which a drag commits
+
+const state = {
+  ideas: [],
+  index: 0,            // index of the current top card
+  kept: [],            // kept ideas (in keep order)
+  history: [],         // {idea, dir, index} for undo
+  musicBuffer: null,   // decoded AudioBuffer of user's mp3
+  localVideos: {},     // idea.url -> objectURL override (CORS-safe source)
+  exports: [],         // {name,url,size}
+  current: null,       // idea open in modal
+  exporting: false,
+};
+
+/* ---------- tiny helpers ---------- */
+const $ = (id) => document.getElementById(id);
+const deckEl = $("deck"), counterEl = $("counter"), emptyEl = $("emptyState");
+const queueListEl = $("queueList"), keptCountEl = $("keptCount");
+const modalEl = $("modal"), canvasEl = $("canvas");
+function esc(s){ return (""+s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function fmt(n){ n=+n||0; if(n>=1e6) return (n/1e6).toFixed(1).replace(/\.0$/,"")+"M"; if(n>=1e3) return (n/1e3).toFixed(1).replace(/\.0$/,"")+"K"; return ""+n; }
+function status(msg, cls){
+  const g=$("globalStatus"), m=$("exportStatus");
+  if(g){ g.textContent=msg||""; g.className="status"+(cls?" "+cls:""); }
+  if(m){ m.textContent=msg||""; m.className="status"+(cls?" "+cls:""); }
+}
+function cleanWords(text){
+  return (text||"").replace(/￼/g,"")        // strip the ￼ object-replacement char
+    .replace(/[ \t]+/g," ").split(/\s+/)
+    .map(w=>w.trim()).filter(Boolean);
+}
+function filenameFor(idea){
+  const m=(idea.url||"").match(/status\/(\d+)/);
+  return (idea.handle||"post") + "-" + (m?m[1]:"x") + ".webm";
+}
+function videoSourceFor(idea){ return state.localVideos[idea.url] || idea.video_url; }
+
+/* ---------- audio ---------- */
+let audioCtx = null;
+function getAudioCtx(){ if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)(); return audioCtx; }
+async function loadMusic(file){
+  try{
+    const actx = getAudioCtx(); await actx.resume();
+    const buf = await file.arrayBuffer();
+    state.musicBuffer = await actx.decodeAudioData(buf);
+    status("music: "+file.name, "ok");
+  }catch(e){ status("couldn't decode music: "+e.message, "warn"); }
+}
+
+/* ---------- data loading ---------- */
+async function loadData(){
+  let ideas = null;
+  // Prefer the live file (works over http). file:// fetch is blocked, so we cascade to the inlined copy.
+  for(const url of ["x_ideas.json","./x_ideas.json"]){
+    try{
+      const r = await fetch(url, {cache:"no-store"});
+      if(r.ok){ ideas = await r.json(); break; }
+    }catch(e){ /* fall through */ }
+  }
+  if(!ideas || !ideas.length) ideas = FALLBACK_IDEAS;
+  state.ideas = ideas.map(i => ({ ...i, _words: cleanWords(i.text) }));
+  state.index = 0; state.kept = []; state.history = [];
+  renderDeck(); renderQueue(); updateCounter();
+}
+
+/* ============================================================ *
+ *  SWIPE DECK
+ * ============================================================ */
+function makeCard(idea, active){
+  const el = document.createElement("div");
+  el.className = "card" + (active?" active":"");
+  const v = document.createElement("video");
+  v.poster = idea.thumbnail;
+  v.muted = true; v.loop = true; v.playsInline = true;
+  v.preload = active ? "auto" : "metadata";
+  if(active) v.src = videoSourceFor(idea);
+  el.appendChild(v);
+
+  const grad = document.createElement("div"); grad.className="grad"; el.appendChild(grad);
+
+  const info = document.createElement("div"); info.className="info";
+  info.innerHTML =
+    `<div class="ci-author">${esc(idea.author||"")}</div>
+     <div class="ci-handle">@${esc(idea.handle||"")}</div>
+     <div class="ci-stats">
+       <span>▶ ${fmt(idea.views)}</span><span>♥ ${fmt(idea.likes)}</span>
+       <span>🔁 ${fmt(idea.retweets)}</span><span>★ ${idea.score}</span>
+     </div>
+     <div class="ci-text">${esc((idea.text||"").replace(/￼/g,"").slice(0,180))}</div>`;
+  el.appendChild(info);
+
+  const likeH = document.createElement("div"); likeH.className="hint like"; likeH.textContent="KEEP →"; el.appendChild(likeH);
+  const nopeH = document.createElement("div"); nopeH.className="hint nope"; nopeH.textContent="← SKIP"; el.appendChild(nopeH);
+
+  if(active){ v.play().catch(()=>{}); attachDrag(el); }
+  return el;
+}
+
+function renderDeck(){
+  // pause anything playing in the deck before rebuilding
+  deckEl.querySelectorAll("video").forEach(v=>{ try{v.pause();}catch(e){} });
+  deckEl.innerHTML = "";
+  const total = state.ideas.length;
+  if(state.index >= total){
+    deckEl.hidden = true; $("actions").style.visibility="hidden";
+    emptyEl.hidden = false; $("emptyKept").textContent = state.kept.length;
+    return;
+  }
+  deckEl.hidden = false; $("actions").style.visibility="visible"; emptyEl.hidden = true;
+  // next card peek (behind)
+  if(state.index+1 < total){
+    const next = makeCard(state.ideas[state.index+1], false);
+    next.style.transform = "translateY(14px) scale(.94)"; next.style.opacity=".7";
+    deckEl.appendChild(next);
+  }
+  const top = makeCard(state.ideas[state.index], true);
+  deckEl.appendChild(top);
+}
+
+let drag = null;
+function attachDrag(card){
+  card.addEventListener("pointerdown", (e)=>{
+    if(e.button!==undefined && e.button!==0) return;
+    drag = { card, startX:e.clientX, dx:0, moved:false };
+    try{ card.setPointerCapture(e.pointerId); }catch(_){}
+    card.setPointerCapture && card.addEventListener("pointermove", onMove);
+    card.addEventListener("pointerup", onUp);
+    card.addEventListener("pointercancel", onUp);
+  });
+}
+function onMove(e){
+  if(!drag) return;
+  drag.dx = e.clientX - drag.startX; drag.moved = true;
+  const rot = Math.max(-22, Math.min(22, drag.dx*0.06));
+  drag.card.style.transform = `translateX(${drag.dx}px) rotate(${rot}deg)`;
+  drag.card.classList.toggle("like", drag.dx > 30);
+  drag.card.classList.toggle("nope", drag.dx < -30);
+}
+function onUp(){
+  if(!drag) return;
+  const { card, dx } = drag;
+  card.removeEventListener("pointermove", onMove);
+  card.removeEventListener("pointerup", onUp);
+  card.removeEventListener("pointercancel", onUp);
+  drag = null;
+  if(dx > SWIPE_THRESH) finishSwipe("keep");
+  else if(dx < -SWIPE_THRESH) finishSwipe("skip");
+  else { card.style.transform=""; card.classList.remove("like","nope"); }
+}
+function finishSwipe(dir){
+  const top = deckEl.querySelector(".card.active");
+  if(!top) return;
+  const out = dir==="keep" ? 700 : -700;
+  const rot = dir==="keep" ? 24 : -24;
+  top.style.transition = "transform .32s ease, opacity .32s ease";
+  top.style.transform = `translateX(${out}px) rotate(${rot}deg)`;
+  top.style.opacity = "0";
+  const idea = state.ideas[state.index];
+  state.history.push({ idea, dir, index: state.index });
+  if(dir==="keep") state.kept.push(idea);
+  state.index++;
+  setTimeout(()=>{ renderDeck(); renderQueue(); updateCounter(); }, 300);
+}
+function undo(){
+  if(!state.history.length) return;
+  const last = state.history.pop();
+  state.index = last.index;
+  if(last.dir==="keep") state.kept.pop();
+  renderDeck(); renderQueue(); updateCounter();
+}
+function updateCounter(){
+  const total = state.ideas.length;
+  const seen = Math.min(state.index, total);
+  counterEl.textContent = total ? `${seen}/${total} swiped · ${state.kept.length} kept` : "";
+}
+
+/* ============================================================ *
+ *  KEPT QUEUE
+ * ============================================================ */
+function renderQueue(){
+  keptCountEl.textContent = state.kept.length;
+  if(!state.kept.length){
+    queueListEl.innerHTML = `<div class="empty-q">Swipe right to keep posts here.</div>`;
+    return;
+  }
+  queueListEl.innerHTML = "";
+  state.kept.forEach((idea)=>{
+    const exported = state.exports.some(e=>e.name===filenameFor(idea));
+    const el = document.createElement("div");
+    el.className = "qitem";
+    el.innerHTML =
+      `<img src="${esc(idea.thumbnail)}" alt=""/>
+       <div class="qi-meta">
+         <div class="qi-author">${esc(idea.author||"")} <span>@${esc(idea.handle||"")}</span></div>
+         <div class="qi-stats">★ ${idea.score} · ▶ ${fmt(idea.views)} · ${idea._words.length} words</div>
+         ${exported?`<div class="qi-exported">✓ exported</div>`:""}
+       </div>`;
+    el.addEventListener("click", ()=>openModal(idea));
+    queueListEl.appendChild(el);
+  });
+}
+function renderExports(){
+  const wrap = $("exports"), list = $("exportsList");
+  if(!state.exports.length){ wrap.hidden=true; return; }
+  wrap.hidden=false; list.innerHTML="";
+  state.exports.slice().reverse().forEach(e=>{
+    const d = document.createElement("div"); d.className="exp-item";
+    d.innerHTML = `🎬 ${esc(e.name)} <span style="color:var(--mut)">(${(e.size/1048576).toFixed(1)} MB)</span> <a href="${e.url}" download="${esc(e.name)}">download</a>`;
+    list.appendChild(d);
+  });
+}
+
+/* ============================================================ *
+ *  COMPOSITE RENDER
+ * ============================================================ */
+const ctx2d = canvasEl.getContext("2d");
+function roundRect(ctx,x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+}
+function drawCover(ctx, el, w, h){
+  const vw = el.videoWidth || el.naturalWidth || 0;
+  const vh = el.videoHeight || el.naturalHeight || 0;
+  if(!vw || !vh){ ctx.fillStyle="#0d0f14"; ctx.fillRect(0,0,w,h); return; }
+  const scale = Math.max(w/vw, h/vh);
+  const dw = vw*scale, dh = vh*scale;
+  try{ ctx.drawImage(el, (w-dw)/2, (h-dh)/2, dw, dh); }
+  catch(e){ ctx.fillStyle="#0d0f14"; ctx.fillRect(0,0,w,h); }
+}
+function drawChip(ctx, idea){
+  // The "avatar box" — kept minimal per your "none": a translucent pill with
+  // the author name + @handle, no fabricated avatar image.
+  const name = idea.author || "";
+  const handle = "@" + (idea.handle || "");
+  ctx.textBaseline = "middle"; ctx.textAlign = "left";
+  ctx.font = "600 27px Arial, sans-serif";
+  const wName = name ? ctx.measureText(name).width : 0;
+  ctx.font = "700 25px Arial, sans-serif";
+  const wHandle = ctx.measureText(handle).width;
+  const pad = 18, gap = name ? 14 : 0;
+  const boxW = pad*2 + wName + gap + wHandle;
+  const boxH = 46, x = 26, y = 26;
+  roundRect(ctx, x, y, boxW, boxH, 23);
+  ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fill();
+  let tx = x + pad;
+  if(name){ ctx.fillStyle="#fff"; ctx.font="600 27px Arial, sans-serif"; ctx.fillText(name, tx, y+boxH/2+1); tx += wName + gap; }
+  ctx.fillStyle = "#22d3ee"; ctx.font="700 25px Arial, sans-serif"; ctx.fillText(handle, tx, y+boxH/2+1);
+}
+function drawCaption(ctx, idea, t, dur){
+  const words = idea._words; if(!words || !words.length) return;
+  const per = Math.max(0.001, dur / words.length);
+  const i = Math.min(words.length-1, Math.max(0, Math.floor(t / per)));
+  const word = words[i] || "";
+  let size = 120 - word.length * 3.6; size = Math.max(52, Math.min(120, size));
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.font = `900 ${size}px "Arial Black","Helvetica Neue",Arial,sans-serif`;
+  const cx = W/2, cy = H - 120;
+  ctx.lineJoin = "round";
+  ctx.lineWidth = Math.max(6, size * 0.15);
+  ctx.strokeStyle = "rgba(0,0,0,.9)";
+  ctx.strokeText(word, cx, cy);
+  ctx.shadowColor = "rgba(0,0,0,.6)"; ctx.shadowBlur = 14; ctx.shadowOffsetY = 3;
+  ctx.fillStyle = "#22d3ee";
+  ctx.fillText(word, cx, cy);
+  ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+}
+function drawProgress(ctx, t, dur){
+  const p = dur>0 ? Math.min(1, t/dur) : 0;
+  ctx.fillStyle = "rgba(255,255,255,.18)"; ctx.fillRect(0, H-6, W, 6);
+  ctx.fillStyle = "#22d3ee"; ctx.fillRect(0, H-6, W*p, 6);
+}
+function drawFrame(ctx, el, idea, t, dur){
+  ctx.fillStyle = "#000"; ctx.fillRect(0,0,W,H);
+  drawCover(ctx, el, W, H);
+  // legibility gradient at the bottom
+  const g = ctx.createLinearGradient(0, H-280, 0, H);
+  g.addColorStop(0,"rgba(0,0,0,0)"); g.addColorStop(1,"rgba(0,0,0,.6)");
+  ctx.fillStyle = g; ctx.fillRect(0, H-280, W, 280);
+  drawChip(ctx, idea);
+  drawCaption(ctx, idea, t, dur);
+  drawProgress(ctx, t, dur);
+}
+function drawPlaceholder(idea){
+  const ctx = ctx2d;
+  ctx.fillStyle = "#000"; ctx.fillRect(0,0,W,H);
+  const img = new Image();           // no crossOrigin -> always loads for display
+  img.onload = ()=>{ drawCover(ctx, img, W, H); drawChip(ctx, idea); drawCaption(ctx, idea, 0, idea._words.length||1); drawHint(ctx); };
+  img.onerror = ()=>{ drawChip(ctx, idea); drawCaption(ctx, idea, 0, idea._words.length||1); drawHint(ctx); };
+  img.src = idea.thumbnail;
+}
+function drawHint(ctx){
+  ctx.textAlign="center"; ctx.textBaseline="middle";
+  ctx.font="700 38px Arial,sans-serif"; ctx.fillStyle="rgba(255,255,255,.92)";
+  ctx.shadowColor="rgba(0,0,0,.6)"; ctx.shadowBlur=10;
+  ctx.fillText("▶  Press Preview", W/2, H/2);
+  ctx.shadowBlur=0;
+}
+
+/* ---------- video element prep ---------- */
+function prepareVideo(idea, {forExport}){
+  return new Promise((resolve, reject)=>{
+    const v = document.createElement("video");
+    if(forExport) v.crossOrigin = "anonymous";   // export needs an untainted canvas
+    v.src = videoSourceFor(idea);
+    v.muted = true; v.playsInline = true; v.preload = "auto"; v.loop = false;
+    let settled = false;
+    const ok  = ()=>{ if(!settled){ settled=true; resolve(v); } };
+    const bad = ()=>{ if(!settled){ settled=true; reject(new Error("VIDEO_LOAD")); } };
+    v.oncanplay = ok; v.onloadedmetadata = ()=>{ if(v.readyState>=2) ok(); };
+    v.onerror = bad; v.load();
+    setTimeout(bad, 25000);
+  });
+}
+
+/* ---------- preview (live composite + music) ---------- */
+let previewState = null;
+async function preview(idea){
+  stopPreview(); status("Loading preview…");
+  let v;
+  try{ v = await prepareVideo(idea, {forExport:false}); }
+  catch(e){ status("⚠ couldn't load source video", "warn"); return; }
+  const ctx = ctx2d;
+  const actx = getAudioCtx(); await actx.resume();
+  let musicSrc = null;
+  if(state.musicBuffer){
+    musicSrc = actx.createBufferSource(); musicSrc.buffer = state.musicBuffer; musicSrc.loop = true;
+    musicSrc.connect(actx.destination);
+  }
+  v.currentTime = 0; v.muted = true;
+  try{ await v.play(); }catch(_){}
+  if(musicSrc) musicSrc.start();
+  const dur = isFinite(v.duration) ? v.duration : 0;
+  previewState = { v, musicSrc, stopped:false };
+  status("Previewing…", "ok");
+  const loop = ()=>{
+    if(!previewState || previewState.stopped) return;
+    drawFrame(ctx, v, idea, v.currentTime, dur);
+    if(!v.ended){ requestAnimationFrame(loop); }
+    else { stopPreview(); status("Preview ended — press Preview to replay."); }
+  };
+  requestAnimationFrame(loop);
+}
+function stopPreview(){
+  if(!previewState) return;
+  previewState.stopped = true;
+  try{ previewState.v.pause(); }catch(_){}
+  try{ previewState.musicSrc && previewState.musicSrc.stop(); }catch(_){}
+  previewState = null;
+}
+
+/* ---------- export to .webm ---------- */
+function pickMime(){
+  const opts = ["video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm;codecs=vp9","video/webm;codecs=vp8","video/webm"];
+  if(typeof MediaRecorder==="undefined" || !MediaRecorder.isTypeSupported) return "video/webm";
+  return opts.find(m=>MediaRecorder.isTypeSupported(m)) || "video/webm";
+}
+async function renderIdeaToWebm(idea, onStatus){
+  onStatus("Preparing…");
+  let v;
+  try{ v = await prepareVideo(idea, {forExport:true}); }
+  catch(e){ throw new Error("cors"); }
+  const dur = isFinite(v.duration) ? v.duration : 0;
+  if(!dur) throw new Error("no duration");
+  if(!canvasEl.captureStream && !HTMLCanvasElement.prototype.captureStream) throw new Error("captureStream unsupported");
+
+  const canvas = document.createElement("canvas"); canvas.width=W; canvas.height=H;
+  const ctx = canvas.getContext("2d");
+  const stream = canvas.captureStream(30);
+
+  const actx = getAudioCtx();
+  await actx.resume();
+  let musicSrc = null;
+  if(state.musicBuffer){
+    const dest = actx.createMediaStreamDestination();
+    musicSrc = actx.createBufferSource(); musicSrc.buffer = state.musicBuffer; musicSrc.loop = true;
+    musicSrc.connect(dest);                       // into the recording only (silent locally)
+    dest.stream.getAudioTracks().forEach(t=>stream.addTrack(t));
+  }
+
+  const mime = pickMime();
+  let rec;
+  try{ rec = new MediaRecorder(stream, {mimeType:mime, videoBitsPerSecond:5_000_000}); }
+  catch(e){ rec = new MediaRecorder(stream); }
+  const chunks = [];
+  rec.ondataavailable = e=>{ if(e.data && e.data.size) chunks.push(e.data); };
+  const stopped = new Promise(r=> rec.onstop = ()=>r());
+
+  onStatus("Recording…");
+  rec.start(120);
+  v.currentTime = 0;
+  try{ await v.play(); }catch(_){}
+  await new Promise(r=>requestAnimationFrame(r));
+
+  await new Promise(resolve=>{
+    const loop = ()=>{
+      drawFrame(ctx, v, idea, v.currentTime, dur);
+      if(!v.ended && v.currentTime < dur - 0.05){ requestAnimationFrame(loop); }
+      else { drawFrame(ctx, v, idea, dur, dur); rec.stop(); if(musicSrc) musicSrc.stop(); v.pause(); resolve(); }
+    };
+    requestAnimationFrame(loop);
+  });
+  await stopped;
+  return new Blob(chunks, {type:"video/webm"});
+}
+function download(blob, name){
+  const a = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 60000);
+}
+function setBusy(busy){
+  state.exporting = busy;
+  ["playBtn","exportBtn","exportAllBtn","exportAllEmpty","keepBtn","skipBtn","undoBtn"].forEach(id=>{
+    const e=$(id); if(e) e.disabled = busy;
+  });
+}
+async function exportWebm(idea){
+  if(state.exporting) return;
+  stopPreview();
+  setBusy(true);
+  try{
+    const blob = await renderIdeaToWebm(idea, status);
+    const name = filenameFor(idea);
+    download(blob, name);
+    state.exports.push({ name, url:URL.createObjectURL(blob), size:blob.size });
+    renderExports(); renderQueue();
+    status(`✓ ${name} (${(blob.size/1048576).toFixed(1)} MB)`, "ok");
+  }catch(e){
+    if(e.message==="cors")
+      status('⚠ source video is cross-origin (CORS). Click "Use local video", then export.', "warn");
+    else
+      status("⚠ export failed: "+e.message, "warn");
+  }finally{ setBusy(false); }
+}
+async function exportAll(){
+  if(!state.kept.length || state.exporting) return;
+  setBusy(true);
+  let done = 0;
+  for(let i=0;i<state.kept.length;i++){
+    const idea = state.kept[i];
+    status(`Exporting ${i+1}/${state.kept.length}: @${idea.handle}…`);
+    try{
+      const blob = await renderIdeaToWebm(idea, ()=>{});
+      const name = filenameFor(idea);
+      download(blob, name);
+      state.exports.push({ name, url:URL.createObjectURL(blob), size:blob.size });
+      done++;
+    }catch(e){
+      status(`⚠ skipped @${idea.handle} (${e.message==="cors"?"CORS — use local video":e.message})`, "warn");
+      await new Promise(r=>setTimeout(r,700));
+    }
+    renderExports(); renderQueue();
+  }
+  setBusy(false);
+  status(`✓ Exported ${done}/${state.kept.length}.`, done===state.kept.length?"ok":"warn");
+}
+
+/* ============================================================ *
+ *  MODAL
+ * ============================================================ */
+function openModal(idea){
+  state.current = idea;
+  // pause the deck video while the modal is open
+  deckEl.querySelectorAll("video").forEach(v=>{ try{v.pause();}catch(_){} });
+  $("modalTitle").innerHTML = `${esc(idea.author||"")} <span>@${esc(idea.handle||"")}</span>`;
+  modalEl.hidden = false;
+  drawPlaceholder(idea);
+  status("");
+}
+function closeModal(){
+  stopPreview();
+  modalEl.hidden = true;
+  state.current = null;
+  // resume the top card
+  const v = deckEl.querySelector(".card.active video");
+  if(v) v.play().catch(()=>{});
+}
+
+/* ============================================================ *
+ *  WIRING
+ * ============================================================ */
+$("keepBtn").addEventListener("click", ()=>finishSwipe("keep"));
+$("skipBtn").addEventListener("click", ()=>finishSwipe("skip"));
+$("undoBtn").addEventListener("click", undo);
+$("exportAllBtn").addEventListener("click", exportAll);
+$("exportAllEmpty").addEventListener("click", exportAll);
+$("restart").addEventListener("click", ()=>{ state.index=0; state.kept=[]; state.history=[]; renderDeck(); renderQueue(); updateCounter(); });
+
+$("musicInput").addEventListener("change", e=>{ const f=e.target.files[0]; if(f) loadMusic(f); e.target.value=""; });
+$("jsonInput").addEventListener("change", e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{ try{ const ideas=JSON.parse(r.result); state.ideas=ideas.map(i=>({...i,_words:cleanWords(i.text)})); state.index=0; state.kept=[]; state.history=[]; renderDeck(); renderQueue(); updateCounter(); status("loaded "+f.name,"ok"); }catch(err){ status("bad JSON: "+err.message,"warn"); } };
+  r.readAsText(f); e.target.value="";
+});
+
+$("playBtn").addEventListener("click", ()=>{ if(state.current) preview(state.current); });
+$("exportBtn").addEventListener("click", ()=>{ if(state.current) exportWebm(state.current); });
+$("modalClose").addEventListener("click", closeModal);
+modalEl.addEventListener("click", e=>{ if(e.target===modalEl) closeModal(); });
+$("localVideoInput").addEventListener("change", e=>{
+  const f=e.target.files[0]; if(!f || !state.current) return;
+  if(state.localVideos[state.current.url]) URL.revokeObjectURL(state.localVideos[state.current.url]);
+  state.localVideos[state.current.url] = URL.createObjectURL(f);
+  status("local video set for @"+state.current.handle+" — export will use it.", "ok");
+  e.target.value="";
+});
+
+document.addEventListener("keydown", e=>{
+  if(modalEl.hidden && emptyEl.hidden && state.index < state.ideas.length){
+    if(e.key==="ArrowRight"){ finishSwipe("keep"); }
+    else if(e.key==="ArrowLeft"){ finishSwipe("skip"); }
+    else if(e.key.toLowerCase()==="u"){ undo(); }
+  }
+  if(e.key==="Escape" && !modalEl.hidden) closeModal();
+});
+
+// go
+loadData().catch(err=>{ status("init failed: "+err.message, "warn"); });
+</script>
+</body>
+</html>

@@ -102,6 +102,26 @@ codebase.
 | 29 | [Token budget + tiers + access gate](five-agents-one-afternoon/29-billing/PROMPT.md) | patch + full test suite (metering, 402 enforcement, allowlist gate) | apply to your own app |
 | 30 | [X Inspiration](five-agents-one-afternoon/30-x-inspo/PROMPT.md) | clean single-feature patch + tests (twitterapi.io → idea cards, Pillow card image) | apply to your own app |
 
+### opus 4.8 vs glm 5.2 — Same 6 Builds, Paid Frontier vs Free Open Model
+**Watch: (video coming — link lands here at publish)**
+
+The same six one-shot prompts fired at **two** models at once — `anthropic/claude-opus-4.8`
+(the paid frontier, on a Max subscription) vs **`z-ai/glm-5.2`** (a free open-weight model,
+run inside Claude Code by pointing it at z.ai). Same prompt, same harness, one shot each.
+Each folder ships **both** builds — `opus/` and `glm/`. Real receipts: the whole **GLM day
+cost $11.70**; Opus would've been **~$55** at metered API rates (it ran free on Max). GLM
+matched or beat Opus on speed/lines on most — and hit its wall on the heaviest build (the
+video factory).
+
+| # | Prompt | What it is |
+|---|--------|------------|
+| 31 | [3D Anatomy Explorer](opus-vs-glm-5.2/31-anatomy-explorer/PROMPT.md) | rotatable muscular figure, hover-to-name, one HTML file (three.js) |
+| 32 | [FIFA Football](opus-vs-glm-5.2/32-fifa-football/PROMPT.md) | top-down football + real AI opponent, first to 3, one HTML file |
+| 33 | [X Video Factory](opus-vs-glm-5.2/33-x-video-factory/PROMPT.md) | Tinder-swipe X feed → composited short-form preview (Node + ffmpeg) |
+| 34 | [Seiko 7S26 Movement](opus-vs-glm-5.2/34-seiko-7s26/PROMPT.md) | interactive 3D watch movement + assemble/explode slider (three.js) |
+| 35 | [AI Minecraft](opus-vs-glm-5.2/35-ai-minecraft/PROMPT.md) | voxel world — mine, chop a tree, craft a sword, kill a pig (three.js) |
+| 36 | [Text Write-On Animation](opus-vs-glm-5.2/36-text-write-on/PROMPT.md) | Remotion word-synced kinetic typography from a spoken line (bring your own audio) |
+
 ## Rules every episode runs under
 
 - **One shot each** — no back-and-forth, no retries.
@@ -109,7 +129,7 @@ codebase.
 - Libraries from a CDN allowed; bundled asset files not.
 - Builds into private codebases ship as **patches of every line the model
   wrote** — the prompt is the product, the patch is the proof.
-- Model is logged per episode (ep1–ep2: `claude-fable-5`; ship-or-skip-ep1 + five-agents-one-afternoon: `claude-opus-4-8`; fusion-vs-opus-4.8: `openrouter/fusion` vs `anthropic/claude-opus-4.8`).
+- Model is logged per episode (ep1–ep2: `claude-fable-5`; ship-or-skip-ep1 + five-agents-one-afternoon: `claude-opus-4-8`; fusion-vs-opus-4.8: `openrouter/fusion` vs `anthropic/claude-opus-4.8`; opus-vs-glm-5.2: `anthropic/claude-opus-4-8` vs `z-ai/glm-5.2`).
 - The **Ship or Skip** series is the exception to "one shot each": each build is brainstormed with the agent first, then built — the take-home prompt is the brainstorm-first brief.
 
 MIT licensed. Yoink anything.

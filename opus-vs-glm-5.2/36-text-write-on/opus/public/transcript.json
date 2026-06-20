@@ -1,0 +1,128 @@
+{
+  "language_code": "eng",
+  "language_probability": 0.9995219707489014,
+  "text": "GLM now has made it into the top four-",
+  "words": [
+    {
+      "text": "GLM",
+      "start": 0.179,
+      "end": 0.779,
+      "type": "word",
+      "logprob": -0.001006562561087776
+    },
+    {
+      "text": " ",
+      "start": 0.779,
+      "end": 0.799,
+      "type": "spacing",
+      "logprob": -0.002780264476314187
+    },
+    {
+      "text": "now",
+      "start": 0.799,
+      "end": 1.12,
+      "type": "word",
+      "logprob": -0.002780264476314187
+    },
+    {
+      "text": " ",
+      "start": 1.12,
+      "end": 1.22,
+      "type": "spacing",
+      "logprob": -0.00042465253500267863
+    },
+    {
+      "text": "has",
+      "start": 1.22,
+      "end": 1.599,
+      "type": "word",
+      "logprob": -0.00042465253500267863
+    },
+    {
+      "text": " ",
+      "start": 1.599,
+      "end": 1.679,
+      "type": "spacing",
+      "logprob": -0.02144552767276764
+    },
+    {
+      "text": "made",
+      "start": 1.679,
+      "end": 1.879,
+      "type": "word",
+      "logprob": -0.02144552767276764
+    },
+    {
+      "text": " ",
+      "start": 1.879,
+      "end": 1.959,
+      "type": "spacing",
+      "logprob": -0.0006952252588234842
+    },
+    {
+      "text": "it",
+      "start": 1.959,
+      "end": 2.2,
+      "type": "word",
+      "logprob": -0.0006952252588234842
+    },
+    {
+      "text": " ",
+      "start": 2.2,
+      "end": 2.279,
+      "type": "spacing",
+      "logprob": -0.0017651228699833155
+    },
+    {
+      "text": "into",
+      "start": 2.279,
+      "end": 2.759,
+      "type": "word",
+      "logprob": -0.0017651228699833155
+    },
+    {
+      "text": " ",
+      "start": 2.759,
+      "end": 2.799,
+      "type": "spacing",
+      "logprob": -0.0001958416833076626
+    },
+    {
+      "text": "the",
+      "start": 2.799,
+      "end": 3.019,
+      "type": "word",
+      "logprob": -0.0001958416833076626
+    },
+    {
+      "text": " ",
+      "start": 3.019,
+      "end": 3.099,
+      "type": "spacing",
+      "logprob": -4.494089080253616e-05
+    },
+    {
+      "text": "top",
+      "start": 3.099,
+      "end": 3.659,
+      "type": "word",
+      "logprob": -4.494089080253616e-05
+    },
+    {
+      "text": " ",
+      "start": 3.659,
+      "end": 3.679,
+      "type": "spacing",
+      "logprob": -0.0041859629563987255
+    },
+    {
+      "text": "four-",
+      "start": 3.679,
+      "end": 3.959,
+      "type": "word",
+      "logprob": -0.05189051888883114
+    }
+  ],
+  "transcription_id": "M8GZHEedcUPScGO9kFp0",
+  "audio_duration_secs": 4.128
+}

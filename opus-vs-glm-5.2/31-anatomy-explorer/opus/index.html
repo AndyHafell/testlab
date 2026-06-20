@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Procedural 3D Anatomy Explorer</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #121519;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  #info {
+    position: fixed; top: 16px; left: 16px; z-index: 10;
+    padding: 14px 16px; max-width: 260px;
+    background: rgba(20, 24, 30, 0.72); backdrop-filter: blur(6px);
+    border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;
+    color: #e7ecf2; pointer-events: none; user-select: none;
+  }
+  #info h1 { margin: 0 0 6px; font-size: 15px; font-weight: 650; letter-spacing: .2px; }
+  #info p { margin: 4px 0 0; font-size: 12px; line-height: 1.45; color: #aab4c0; }
+  #info .keys { margin-top: 10px; display: grid; gap: 4px; }
+  #info .keys span { font-size: 11.5px; color: #c7d0db; }
+  #info b { color: #f2f5f8; font-weight: 600; }
+  #info .count { color: #7fb2ff; }
+
+  #label {
+    position: fixed; z-index: 20; display: none; pointer-events: none;
+    padding: 5px 10px; font-size: 13px; font-weight: 600; color: #fff;
+    background: rgba(28, 78, 168, 0.92); border: 1px solid rgba(140,180,255,0.6);
+    border-radius: 8px; transform: translateY(-2px); white-space: nowrap;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+  }
+  #hint {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+    z-index: 10; font-size: 11.5px; color: #6f7a86; pointer-events: none; user-select: none;
+  }
+</style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="info">
+    <h1>Anatomy Explorer</h1>
+    <p>A procedurally generated écorché figure — body and every muscle built in code, no asset files.</p>
+    <div class="keys">
+      <span>🖱️ <b>Drag</b> to rotate the figure</span>
+      <span>🔍 <b>Scroll</b> to zoom in / out</span>
+      <span>✨ <b>Hover</b> a muscle to identify it</span>
+    </div>
+    <p style="margin-top:10px;"><span class="count" id="muscle-count">—</span> highlightable muscle regions</p>
+  </div>
+
+  <div id="label"></div>
+  <div id="hint">Cyan glow = hovered muscle &nbsp;·&nbsp; left &amp; right highlight independently</div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    // ---------------------------------------------------------------------
+    // Renderer / scene / camera
+    // ---------------------------------------------------------------------
+    const app = document.getElementById('app');
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    app.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x121519);
+    scene.fog = new THREE.Fog(0x121519, 18, 38);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(2.6, 4.4, 9.6);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 3.6, 0);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.minDistance = 4;
+    controls.maxDistance = 22;
+    controls.maxPolarAngle = Math.PI * 0.92;
+    controls.update();
+
+    // ---------------------------------------------------------------------
+    // Lighting + ground
+    // ---------------------------------------------------------------------
+    scene.add(new THREE.HemisphereLight(0x9fb4c9, 0x2a2320, 0.75));
+
+    const key = new THREE.DirectionalLight(0xffffff, 1.45);
+    key.position.set(6, 10, 7);
+    key.castShadow = true;
+    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.camera.near = 1;
+    key.shadow.camera.far = 40;
+    key.shadow.camera.left = -7;
+    key.shadow.camera.right = 7;
+    key.shadow.camera.top = 9;
+    key.shadow.camera.bottom = -2;
+    key.shadow.bias = -0.0006;
+    scene.add(key);
+
+    const fill = new THREE.DirectionalLight(0x6f8cff, 0.55);
+    fill.position.set(-7, 4, -5);
+    scene.add(fill);
+
+    const rim = new THREE.DirectionalLight(0xff9a6f, 0.4);
+    rim.position.set(0, 5, -9);
+    scene.add(rim);
+
+    const ground = new THREE.Mesh(
+      new THREE.CircleGeometry(9, 64),
+      new THREE.MeshStandardMaterial({ color: 0x171b21, roughness: 1, metalness: 0 })
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    // ---------------------------------------------------------------------
+    // Figure construction
+    // ---------------------------------------------------------------------
+    const figure = new THREE.Group();
+    scene.add(figure);
+
+    const base = new THREE.Group(); // non-interactive body mass (head, core, limb cores)
+    figure.add(base);
+
+    const muscles = []; // raycast targets
+
+    // Shared neutral "skin/tendon" material for the base body.
+    const skin = new THREE.MeshStandardMaterial({ color: 0xceb39c, roughness: 0.85, metalness: 0.0 });
+
+    // Reused unit sphere for all ellipsoids.
+    const sphereGeo = new THREE.SphereGeometry(1, 28, 20);
+
+    const v = (x, y, z) => new THREE.Vector3(x, y, z);
+    const lerp = (a, b, t) => a.clone().lerp(b, t); // returns fresh vector
+
+    // Each muscle gets its own material so highlighting is independent.
+    const mat = (hex) => new THREE.MeshStandardMaterial({
+      color: hex, roughness: 0.5, metalness: 0.05, emissive: 0x000000, emissiveIntensity: 1
+    });
+
+    function ellipsoidMesh(material, cx, cy, cz, sx, sy, sz) {
+      const m = new THREE.Mesh(sphereGeo, material);
+      m.position.set(cx, cy, cz);
+      m.scale.set(sx, sy, sz);
+      m.castShadow = true;
+      return m;
+    }
+
+    // A capsule stretched between two points (used for limbs and elongated muscles).
+    function capsuleMesh(material, p1, p2, r) {
+      const dir = new THREE.Vector3().subVectors(p2, p1);
+      const len = dir.length();
+      const cyl = Math.max(0.001, len - 2 * r);
+      const geo = new THREE.CapsuleGeometry(r, cyl, 10, 18);
+      const m = new THREE.Mesh(geo, material);
+      m.position.copy(p1).add(p2).multiplyScalar(0.5);
+      m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+      m.castShadow = true;
+      return m;
+    }
+
+    // Register an interactive muscle region.
+    function reg(mesh, name) {
+      mesh.userData.name = name;
+      mesh.userData.muscle = true;
+      muscles.push(mesh);
+      figure.add(mesh);
+      return mesh;
+    }
+
+    // Per-side landmark points (side = +1 right, -1 left).
+    function pts(side) {
+      return {
+        S: v(1.00 * side, 5.60, 0.05), // shoulder
+        E: v(1.35 * side, 4.35, 0.08), // elbow
+        W: v(1.50 * side, 3.25, 0.12), // wrist
+        H: v(0.50 * side, 3.45, 0.00), // hip
+        K: v(0.55 * side, 1.85, 0.05), // knee
+        A: v(0.50 * side, 0.35, -0.02) // ankle
+      };
+    }
+
+    // --- Central body mass --------------------------------------------------
+    function buildBaseBody() {
+      base.add(ellipsoidMesh(skin, 0, 6.78, 0.02, 0.60, 0.70, 0.62)); // head
+      base.add(capsuleMesh(skin, v(0, 5.68, 0), v(0, 6.26, 0.02), 0.20)); // neck
+      base.add(ellipsoidMesh(skin, 0, 5.00, 0, 0.90, 0.95, 0.60)); // ribcage
+      base.add(ellipsoidMesh(skin, 0, 4.25, 0, 0.66, 0.70, 0.48)); // abdomen
+      base.add(ellipsoidMesh(skin, 0, 3.50, 0, 0.74, 0.60, 0.46)); // pelvis
+    }
+
+    // --- Midline muscles (single region each) ------------------------------
+    function buildCenterMuscles() {
+      reg(ellipsoidMesh(mat(0xb35047), 0, 4.25, 0.44, 0.30, 0.62, 0.22), 'Rectus abdominis (abs)');
+      reg(ellipsoidMesh(mat(0x9a3d35), 0, 5.50, -0.40, 0.78, 0.62, 0.24), 'Trapezius');
+    }
+
+    // --- Arm (per side) ----------------------------------------------------
+    function buildArm(side) {
+      const p = pts(side);
+      // limb cores
+      base.add(capsuleMesh(skin, p.S, p.E, 0.20)); // upper arm
+      base.add(capsuleMesh(skin, p.E, p.W, 0.16)); // forearm
+      base.add(ellipsoidMesh(skin, p.W.x, p.W.y - 0.22, p.W.z + 0.04, 0.13, 0.24, 0.18)); // hand
+      // muscles
+      reg(ellipsoidMesh(mat(0xab4d3f), p.S.x + 0.04 * side, p.S.y + 0.06, p.S.z, 0.30, 0.32, 0.32), 'Deltoid');
+      reg(capsuleMesh(mat(0xa6443a), lerp(p.S, p.E, 0.25).add(v(0, 0, 0.12)), lerp(p.S, p.E, 0.78).add(v(0, 0, 0.10)), 0.13), 'Biceps');
+      reg(capsuleMesh(mat(0x9e4036), lerp(p.S, p.E, 0.18).add(v(0, 0, -0.13)), lerp(p.S, p.E, 0.82).add(v(0, 0, -0.12)), 0.14), 'Triceps');
+      reg(capsuleMesh(mat(0xa84a40), lerp(p.E, p.W, 0.10).add(v(0, 0, 0.07)), lerp(p.E, p.W, 0.72).add(v(0, 0, 0.05)), 0.13), 'Forearm');
+    }
+
+    // --- Leg (per side) ----------------------------------------------------
+    function buildLeg(side) {
+      const p = pts(side);
+      base.add(capsuleMesh(skin, p.H, p.K, 0.30)); // thigh core
+      base.add(capsuleMesh(skin, p.K, p.A, 0.19)); // shin core
+      base.add(ellipsoidMesh(skin, p.A.x, 0.12, p.A.z + 0.22, 0.15, 0.12, 0.32)); // foot
+      reg(ellipsoidMesh(mat(0xa54339), 0.28 * side, 3.45, -0.32, 0.34, 0.36, 0.34), 'Gluteus maximus');
+      reg(capsuleMesh(mat(0xab483d), lerp(p.H, p.K, 0.12).add(v(0, 0, 0.16)), lerp(p.H, p.K, 0.88).add(v(0, 0, 0.12)), 0.24), 'Quadriceps');
+      reg(capsuleMesh(mat(0x9c3f36), lerp(p.H, p.K, 0.12).add(v(0, 0, -0.16)), lerp(p.H, p.K, 0.85).add(v(0, 0, -0.13)), 0.20), 'Hamstrings');
+      reg(capsuleMesh(mat(0x9e4137), lerp(p.K, p.A, 0.05).add(v(0, 0, -0.12)), lerp(p.K, p.A, 0.50).add(v(0, 0, -0.10)), 0.18), 'Gastrocnemius (calf)');
+      reg(capsuleMesh(mat(0xa84b40), lerp(p.K, p.A, 0.05).add(v(0, 0, 0.12)), lerp(p.K, p.A, 0.60).add(v(0, 0, 0.10)), 0.10), 'Tibialis anterior');
+    }
+
+    // --- Torso muscles (per side) ------------------------------------------
+    function buildTorsoSide(side) {
+      reg(ellipsoidMesh(mat(0xb04a40), 0.40 * side, 5.05, 0.46, 0.42, 0.34, 0.30), 'Pectoralis major');
+      reg(ellipsoidMesh(mat(0xa6463c), 0.46 * side, 4.20, 0.26, 0.20, 0.42, 0.34), 'Obliques');
+      reg(ellipsoidMesh(mat(0x9c3f37), 0.56 * side, 4.75, 0.28, 0.16, 0.26, 0.28), 'Serratus anterior');
+      reg(capsuleMesh(mat(0xb0564c), v(0.16 * side, 6.25, 0.12), v(0.07 * side, 5.78, 0.34), 0.06), 'Sternocleidomastoid');
+      reg(ellipsoidMesh(mat(0xa14238), 0.42 * side, 4.75, -0.36, 0.40, 0.60, 0.26), 'Latissimus dorsi');
+    }
+
+    buildBaseBody();
+    buildCenterMuscles();
+    for (const side of [1, -1]) {
+      buildArm(side);
+      buildLeg(side);
+      buildTorsoSide(side);
+    }
+
+    document.getElementById('muscle-count').textContent = muscles.length;
+
+    // ---------------------------------------------------------------------
+    // Hover interaction (raycasting + floating label)
+    // ---------------------------------------------------------------------
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    const label = document.getElementById('label');
+    let hovered = null;
+
+    function setHover(obj) {
+      if (hovered === obj) return;
+      clearHover();
+      hovered = obj;
+      obj.material.emissive.setHex(0x2b6cff);
+      obj.material.emissiveIntensity = 0.95;
+      document.body.style.cursor = 'pointer';
+      label.textContent = obj.userData.name;
+      label.style.display = 'block';
+    }
+
+    function clearHover() {
+      if (hovered) {
+        hovered.material.emissive.setHex(0x000000);
+        hovered = null;
+      }
+      document.body.style.cursor = 'default';
+      label.style.display = 'none';
+    }
+
+    function onMove(e) {
+      const r = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+      pointer.y = -((e.clientY - r.top) / r.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const hits = raycaster.intersectObjects(muscles, false);
+      if (hits.length) {
+        setHover(hits[0].object);
+        label.style.left = (e.clientX + 14) + 'px';
+        label.style.top = (e.clientY - 6) + 'px';
+      } else {
+        clearHover();
+      }
+    }
+
+    renderer.domElement.addEventListener('pointermove', onMove);
+    renderer.domElement.addEventListener('pointerleave', clearHover);
+
+    // ---------------------------------------------------------------------
+    // Resize + render loop
+    // ---------------------------------------------------------------------
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>

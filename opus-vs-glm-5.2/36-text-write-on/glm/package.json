@@ -1,0 +1,17 @@
+{
+  "name": "word-sync-writeon",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Remotion word-synced write-on animation driven by ElevenLabs Scribe word-level timestamps.",
+  "scripts": {
+    "dev": "remotion studio src/index.jsx",
+    "render": "remotion render src/index.jsx WriteOn out/write-on.mp4",
+    "transcribe": "node scripts/transcribe.mjs"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "^4.0.0"
+  }
+}

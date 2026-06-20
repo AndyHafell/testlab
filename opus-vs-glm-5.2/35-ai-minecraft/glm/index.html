@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VoxelCraft</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#87ceeb;font-family:monospace;}
+  #app{position:fixed;inset:0;}
+  canvas{display:block;}
+  #crosshair{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:22px;height:22px;pointer-events:none;z-index:5;}
+  #crosshair::before,#crosshair::after{content:'';position:absolute;background:#fff;box-shadow:0 0 2px #000;}
+  #crosshair::before{left:50%;top:0;width:2px;height:100%;transform:translateX(-50%);}
+  #crosshair::after{top:50%;left:0;height:2px;width:100%;transform:translateY(-50%);}
+  #hud{position:fixed;top:10px;left:10px;color:#fff;text-shadow:1px 1px 2px #000;font-size:14px;z-index:5;line-height:1.55;pointer-events:none;}
+  #toast{position:fixed;left:50%;top:18%;transform:translateX(-50%);background:rgba(0,0,0,.62);color:#fff;padding:8px 14px;border-radius:6px;font-size:14px;z-index:6;opacity:0;transition:opacity .35s;pointer-events:none;white-space:nowrap;}
+  #toast.show{opacity:1;}
+  #overlay{position:fixed;inset:0;background:rgba(0,0,0,.58);color:#fff;display:flex;align-items:center;justify-content:center;flex-direction:column;z-index:10;cursor:pointer;text-align:center;}
+  #overlay h1{font-size:30px;margin:0 0 8px;letter-spacing:2px;}
+  #overlay p{margin:3px 0;font-size:13.5px;line-height:1.6;max-width:440px;}
+  #overlay .hint{margin-top:14px;font-size:18px;color:#8fe3ff;}
+  #overlay b{color:#ffd87a;}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="crosshair"></div>
+<div id="hud"></div>
+<div id="toast"></div>
+<div id="overlay">
+  <h1>VOXELCRAFT</h1>
+  <p><b>WASD</b> move &nbsp; <b>Mouse</b> look &nbsp; <b>Space</b> jump &nbsp; <b>Shift</b> sprint</p>
+  <p><b>Left-click</b>: break block / attack pig &nbsp;·&nbsp; <b>Right-click</b>: place wood</p>
+  <p>Chop tree trunks (brown) for <b>Wood</b> &nbsp;·&nbsp; press <b>C</b> to craft a <b>Sword</b> (2 wood)</p>
+  <p>Hunt the pig — left-click it to attack. Kill it!</p>
+  <p class="hint">Click to play</p>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+/* ---------------- Constants ---------------- */
+const SX=64, SZ=64, SY=40;
+const SPAWN=new THREE.Vector3(SX/2, 30, SZ/2);
+const GRAVITY=-28, JUMP=8.8, WALK=4.6, SPRINT=7.8, REACH=5;
+const HW=0.3, PHEIGHT=1.8, EYE=1.6, EPS=0.001;
+
+const AIR=0,GRASS=1,DIRT=2,STONE=3,WOOD=4,LEAVES=5,SAND=6,PLANKS=7,BEDROCK=8;
+const COL={
+  [GRASS]:{top:[0.36,0.66,0.27],side:[0.46,0.34,0.20],bot:[0.50,0.35,0.22]},
+  [DIRT]:{all:[0.50,0.35,0.22]},
+  [STONE]:{all:[0.52,0.52,0.55]},
+  [WOOD]:{top:[0.62,0.47,0.26],side:[0.42,0.30,0.16],bot:[0.62,0.47,0.26]},
+  [LEAVES]:{all:[0.20,0.50,0.16]},
+  [SAND]:{all:[0.85,0.80,0.55]},
+  [PLANKS]:{all:[0.70,0.55,0.30]},
+  [BEDROCK]:{all:[0.25,0.25,0.27]},
+};
+// per-face shade: left,right,bottom,top,back,front
+const FACE_SHADE=[0.78,0.78,0.55,1.0,0.70,0.70];
+
+// canonical voxel face table (corners + outward dir)
+const FACES=[
+  {dir:[-1,0,0], corners:[{pos:[0,1,0]},{pos:[0,0,0]},{pos:[0,1,1]},{pos:[0,0,1]}]},
+  {dir:[ 1,0,0], corners:[{pos:[1,1,1]},{pos:[1,0,1]},{pos:[1,1,0]},{pos:[1,0,0]}]},
+  {dir:[0,-1,0], corners:[{pos:[1,0,1]},{pos:[0,0,1]},{pos:[1,0,0]},{pos:[0,0,0]}]},
+  {dir:[0, 1,0], corners:[{pos:[0,1,1]},{pos:[1,1,1]},{pos:[0,1,0]},{pos:[1,1,0]}]},
+  {dir:[0,0,-1], corners:[{pos:[1,0,0]},{pos:[0,0,0]},{pos:[1,1,0]},{pos:[0,1,0]}]},
+  {dir:[0,0, 1], corners:[{pos:[0,0,1]},{pos:[1,0,1]},{pos:[0,1,1]},{pos:[1,1,1]}]},
+];
+
+/* ---------------- World storage ---------------- */
+const blocks=new Uint8Array(SX*SY*SZ);
+const heightMap=new Int16Array(SX*SZ);
+const idx=(x,y,z)=>(y*SZ+z)*SX+x;
+function getBlock(x,y,z){ if(x<0||x>=SX||z<0||z>=SZ||y<0||y>=SY) return AIR; return blocks[idx(x,y,z)]; }
+function setBlock(x,y,z,t){ if(x<0||x>=SX||z<0||z>=SZ||y<0||y>=SY) return; blocks[idx(x,y,z)]=t; }
+function isSolid(t){ return t!==AIR; }
+// horizontal out-of-bounds act as invisible walls; below 0 solid; above SY air
+function solidForCollision(x,y,z){
+  if(x<0||x>=SX||z<0||z>=SZ) return true;
+  if(y<0) return true;
+  if(y>=SY) return false;
+  return isSolid(blocks[idx(x,y,z)]);
+}
+
+/* ---------------- Noise ---------------- */
+function hash(x,z){let n=(x|0)*374761393+(z|0)*668265263; n=(n^(n>>13))*1274126177; return ((n^(n>>16))>>>0)/4294967295;}
+function lerp(a,b,t){return a+(b-a)*t;}
+function smooth(t){return t*t*(3-2*t);}
+function vnoise(x,z){const x0=Math.floor(x),z0=Math.floor(z),xf=x-x0,zf=z-z0;const a=hash(x0,z0),b=hash(x0+1,z0),c=hash(x0,z0+1),d=hash(x0+1,z0+1);const u=smooth(xf),v=smooth(zf);return lerp(lerp(a,b,u),lerp(c,d,u),v);}
+function fbm(x,z){let v=0,amp=0.55,f=1;for(let i=0;i<4;i++){v+=amp*vnoise(x*f,z*f);f*=2;amp*=0.5;}return v;}
+
+/* ---------------- Terrain generation ---------------- */
+function generate(){
+  for(let x=0;x<SX;x++)for(let z=0;z<SZ;z++){
+    const h=Math.floor(6+fbm(x/26,z/26)*18); // 6..24
+    heightMap[x+z*SX]=h;
+    for(let y=0;y<=h;y++){
+      let t;
+      if(y===0) t=BEDROCK;
+      else if(y===h) t=(h<=8?SAND:GRASS);
+      else if(y>=h-3) t=(h<=8?SAND:DIRT);
+      else t=STONE;
+      setBlock(x,y,z,t);
+    }
+  }
+  for(let x=3;x<SX-3;x++)for(let z=3;z<SZ-3;z++){
+    const h=heightMap[x+z*SX];
+    if(h<=8) continue;
+    if(hash(x*7+13,z*11+29)<0.018 && getBlock(x,h,z)===GRASS) plantTree(x,h+1,z);
+  }
+}
+function plantTree(x,baseY,z){
+  const th=4+Math.floor(hash(x*3+5,z*7+2)*3); // 4..6
+  for(let i=0;i<th;i++) setBlock(x,baseY+i,z,WOOD);
+  const top=baseY+th;
+  for(let dy=-1;dy<=1;dy++)for(let dx=-2;dx<=2;dx++)for(let dz=-2;dz<=2;dz++){
+    if(dy===-1 && Math.abs(dx)===2 && Math.abs(dz)===2) continue;
+    if(dy===1 && (Math.abs(dx)>1||Math.abs(dz)>1)) continue;
+    const lx=x+dx,ly=top+dy,lz=z+dz;
+    if(getBlock(lx,ly,lz)===AIR) setBlock(lx,ly,lz,LEAVES);
+  }
+  setBlock(x,top+1,z,LEAVES);
+}
+generate();
+
+/* ---------------- World mesh ---------------- */
+function buildWorldMesh(){
+  const pos=[],norm=[],col=[],ind=[];
+  for(let y=0;y<SY;y++)for(let z=0;z<SZ;z++)for(let x=0;x<SX;x++){
+    const t=getBlock(x,y,z);
+    if(t===AIR) continue;
+    for(let f=0;f<6;f++){
+      const face=FACES[f];
+      const nb=getBlock(x+face.dir[0],y+face.dir[1],z+face.dir[2]);
+      if(nb!==AIR) continue; // hidden face (all block types opaque)
+      const cd=COL[t];
+      let base;
+      if(f===3) base=cd.top||cd.all;
+      else if(f===2) base=cd.bot||cd.all;
+      else base=cd.side||cd.all;
+      const sh=FACE_SHADE[f], r=base[0]*sh, g=base[1]*sh, b=base[2]*sh;
+      const start=pos.length/3;
+      for(const c of face.corners){
+        pos.push(x+c.pos[0], y+c.pos[1], z+c.pos[2]);
+        norm.push(face.dir[0],face.dir[1],face.dir[2]);
+        col.push(r,g,b);
+      }
+      ind.push(start,start+1,start+2, start+2,start+1,start+3);
+    }
+  }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  g.setAttribute('normal',new THREE.Float32BufferAttribute(norm,3));
+  g.setAttribute('color',new THREE.Float32BufferAttribute(col,3));
+  g.setIndex(ind);
+  return g;
+}
+
+/* ---------------- Renderer / scene / camera ---------------- */
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+document.getElementById('app').appendChild(renderer.domElement);
+
+const scene=new THREE.Scene();
+const skyCol=new THREE.Color(0x87ceeb);
+scene.background=skyCol;
+scene.fog=new THREE.Fog(skyCol,38,82);
+
+const camera=new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 500);
+camera.position.copy(SPAWN);
+scene.add(camera);
+
+const controls=new PointerLockControls(camera, renderer.domElement);
+const overlay=document.getElementById('overlay');
+overlay.addEventListener('click',()=>controls.lock());
+controls.addEventListener('lock',()=>overlay.style.display='none');
+controls.addEventListener('unlock',()=>overlay.style.display='flex');
+
+// lights (affect pig + sword)
+scene.add(new THREE.AmbientLight(0xffffff,0.7));
+const sun=new THREE.DirectionalLight(0xffffff,0.75); sun.position.set(40,90,30); scene.add(sun);
+scene.add(new THREE.HemisphereLight(0xbfe3ff,0x4a5a3a,0.4));
+
+const worldMesh=new THREE.Mesh(buildWorldMesh(), new THREE.MeshBasicMaterial({vertexColors:true}));
+scene.add(worldMesh);
+function rebuild(){ worldMesh.geometry.dispose(); worldMesh.geometry=buildWorldMesh(); }
+
+// block highlight
+const highlight=new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.BoxGeometry(1.003,1.003,1.003)),
+  new THREE.LineBasicMaterial({color:0x000000,transparent:true,opacity:0.45}));
+highlight.visible=false; scene.add(highlight);
+
+/* ---------------- Sword viewmodel ---------------- */
+const swordGroup=new THREE.Group();
+const blade=new THREE.Mesh(new THREE.BoxGeometry(0.07,0.52,0.07), new THREE.MeshLambertMaterial({color:0xcfd6dd}));
+blade.position.y=0.26;
+const guard=new THREE.Mesh(new THREE.BoxGeometry(0.22,0.05,0.07), new THREE.MeshLambertMaterial({color:0x7a5a2a}));
+guard.position.y=0;
+const handle=new THREE.Mesh(new THREE.BoxGeometry(0.06,0.16,0.06), new THREE.MeshLambertMaterial({color:0x4a3318}));
+handle.position.y=-0.09;
+swordGroup.add(blade,guard,handle);
+swordGroup.position.set(0.45,-0.35,-0.7);
+swordGroup.rotation.set(0.2,0.3,0.12);
+swordGroup.visible=false;
+camera.add(swordGroup);
+
+/* ---------------- Pig ---------------- */
+class Pig{
+  constructor(){
+    this.group=new THREE.Group();
+    const bodyMat=new THREE.MeshLambertMaterial({color:0xe89a9a});
+    const snoutMat=new THREE.MeshLambertMaterial({color:0xd07878});
+    const legMat=new THREE.MeshLambertMaterial({color:0xcf7a7a});
+    this.mats=[bodyMat,snoutMat,legMat];
+    const body=new THREE.Mesh(new THREE.BoxGeometry(0.9,0.7,1.3),bodyMat); body.position.y=0.62; this.group.add(body);
+    const head=new THREE.Mesh(new THREE.BoxGeometry(0.6,0.6,0.6),bodyMat); head.position.set(0,0.68,-0.85); this.group.add(head);
+    const snout=new THREE.Mesh(new THREE.BoxGeometry(0.34,0.3,0.15),snoutMat); snout.position.set(0,0.6,-1.18); this.group.add(snout);
+    for(const [sx,sz] of [[0.3,0.5],[-0.3,0.5],[0.3,-0.42],[-0.3,-0.42]]){
+      const leg=new THREE.Mesh(new THREE.BoxGeometry(0.22,0.42,0.22),legMat); leg.position.set(sx,0.21,sz); this.group.add(leg);
+    }
+    this.health=10; this.alive=true; this.dir=Math.random()*Math.PI*2; this.timer=0; this.flash=0;
+    scene.add(this.group);
+    this.spawn();
+  }
+  spawn(){
+    for(let i=0;i<400;i++){
+      const x=4+Math.floor(Math.random()*(SX-8)), z=4+Math.floor(Math.random()*(SZ-8));
+      const h=heightMap[x+z*SX];
+      if(h>8 && getBlock(x,h,z)===GRASS){
+        this.group.position.set(x+0.5,h+1,z+0.5);
+        this.health=10; this.alive=true; this.group.visible=true;
+        this.group.scale.set(1,1,1); this.dir=Math.random()*Math.PI*2;
+        return;
+      }
+    }
+  }
+  update(dt){
+    if(!this.alive) return;
+    if(this.flash>0){ this.flash-=dt; const on=this.flash>0; for(const m of this.mats) m.emissive.setHex(on?0x661111:0x000000); }
+    this.timer-=dt;
+    if(this.timer<=0){ this.dir=Math.random()*Math.PI*2; this.timer=1+Math.random()*2; }
+    // avoid trees / walls
+    const bx=Math.floor(this.group.position.x), bz=Math.floor(this.group.position.z);
+    const by=heightMap[bx+bz*SX];
+    if(isSolid(getBlock(bx,by+1,bz)) || isSolid(getBlock(bx,by+2,bz))) this.dir+=2.2+Math.random();
+    const speed=1.5;
+    let nx=this.group.position.x+Math.sin(this.dir)*speed*dt;
+    let nz=this.group.position.z+Math.cos(this.dir)*speed*dt;
+    if(nx<2||nx>SX-2||nz<2||nz>SZ-2) this.dir+=Math.PI;
+    else { this.group.position.x=nx; this.group.position.z=nz; }
+    const gh=heightMap[Math.floor(this.group.position.x)+Math.floor(this.group.position.z)*SX];
+    this.group.position.y=gh+1;
+    this.group.rotation.y=this.dir;
+  }
+  hurt(dmg, fromPos){
+    if(!this.alive) return;
+    this.health-=dmg; this.flash=0.25;
+    const k=new THREE.Vector3().subVectors(this.group.position, fromPos); k.y=0;
+    if(k.lengthSq()>0){ k.normalize().multiplyScalar(1.8); this.group.position.add(k); }
+    if(this.health<=0){ this.alive=false; this.group.visible=false; showToast('Pig slain! 🐷 +0 XP'); setTimeout(()=>this.spawn(),4500); }
+  }
+}
+const pig=new Pig();
+
+/* ---------------- Player state & inventory ---------------- */
+let wood=0, hasSword=false;
+const vel=new THREE.Vector3();
+const pos=camera.position;
+let onGround=false;
+let target=null; // current voxel raycast result
+let swingT=0;
+
+/* ---------------- Voxel raycast (DDA) ---------------- */
+function raycastVoxel(){
+  const o=pos;
+  const d=new THREE.Vector3(); camera.getWorldDirection(d);
+  let x=Math.floor(o.x), y=Math.floor(o.y), z=Math.floor(o.z);
+  const sx=d.x>0?1:(d.x<0?-1:0);
+  const sy=d.y>0?1:(d.y<0?-1:0);
+  const sz=d.z>0?1:(d.z<0?-1:0);
+  const tdx=d.x!==0?Math.abs(1/d.x):Infinity;
+  const tdy=d.y!==0?Math.abs(1/d.y):Infinity;
+  const tdz=d.z!==0?Math.abs(1/d.z):Infinity;
+  let tmx=d.x!==0?(sx>0?(x+1-o.x):(o.x-x))*tdx:Infinity;
+  let tmy=d.y!==0?(sy>0?(y+1-o.y):(o.y-y))*tdy:Infinity;
+  let tmz=d.z!==0?(sz>0?(z+1-o.z):(o.z-z))*tdz:Infinity;
+  let px=x,py=y,pz=z;
+  for(let i=0;i<90;i++){
+    const t=getBlock(x,y,z);
+    if(isSolid(t)) return {hit:{x,y,z,t}, place:{x:px,y:py,z:pz}, dist:Math.min(tmx,tmy,tmz)};
+    px=x;py=y;pz=z;
+    if(tmx<tmy&&tmx<tmz){x+=sx;tmx+=tdx;}
+    else if(tmy<tmz){y+=sy;tmy+=tdy;}
+    else {z+=sz;tmz+=tdz;}
+    if(Math.min(tmx,tmy,tmz)>REACH) return null;
+  }
+  return null;
+}
+
+/* ---------------- Interaction ---------------- */
+function onLeftClick(){
+  const vox=target;
+  const voxDist=vox?vox.dist:Infinity;
+  const ray=new THREE.Raycaster(); ray.setFromCamera({x:0,y:0},camera); ray.far=Math.min(4,voxDist+0.05);
+  const hits=pig.alive?ray.intersectObjects(pig.group.children,false):[];
+  if(hits.length && hits[0].distance<voxDist){
+    pig.hurt(hasSword?5:1, pos);
+    showToast(hasSword?`Hit pig! (5 dmg) — HP ${Math.max(0,pig.health)}`:`Punch pig (1 dmg) — craft a sword!`);
+    return;
+  }
+  if(vox){
+    const {x,y,z,t}=vox.hit;
+    if(t===BEDROCK){ showToast("Can't break bedrock"); return; }
+    setBlock(x,y,z,AIR);
+    if(t===WOOD){ wood++; updateHUD(); showToast(`+1 wood (${wood})`); }
+    rebuild();
+  }
+}
+function onRightClick(){
+  if(!target) return;
+  if(wood<=0){ showToast('Need wood to place'); return; }
+  const {x,y,z}=target.place;
+  const px=Math.floor(pos.x), pz=Math.floor(pos.z);
+  const feetY=Math.floor(pos.y-EYE), headY=Math.floor(pos.y-EYE+PHEIGHT);
+  if(x===px && z===pz && (y===feetY||y===headY)) return; // would trap player
+  if(getBlock(x,y,z)!==AIR) return;
+  setBlock(x,y,z,WOOD); wood--; updateHUD(); rebuild();
+}
+function craftSword(){
+  if(hasSword){ showToast('Already have a sword'); return; }
+  if(wood<2){ showToast(`Need 2 wood to craft a sword (have ${wood})`); return; }
+  wood-=2; hasSword=true; swordGroup.visible=true; updateHUD(); showToast('Sword crafted! ⚔  Left-click the pig');
+}
+
+/* ---------------- HUD ---------------- */
+function updateHUD(){
+  let h=`Wood: <b>${wood}</b><br>Sword: <b>${hasSword?'Yes ⚔':'No'}</b>`;
+  if(!hasSword && wood>=2) h+=`<br><span style="color:#8fe3ff">Press C to craft sword</span>`;
+  document.getElementById('hud').innerHTML=h;
+}
+let toastTimer;
+function showToast(msg){ const el=document.getElementById('toast'); el.textContent=msg; el.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove('show'),1700); }
+updateHUD();
+
+/* ---------------- Input ---------------- */
+const keys={};
+addEventListener('keydown',e=>{ keys[e.code]=true; if(e.code==='KeyC') craftSword(); });
+addEventListener('keyup',e=>{ keys[e.code]=false; });
+renderer.domElement.addEventListener('mousedown',e=>{
+  if(!controls.isLocked) return;
+  if(e.button===0){ onLeftClick(); if(hasSword) swingT=0.25; }
+  else if(e.button===2){ onRightClick(); }
+});
+addEventListener('contextmenu',e=>e.preventDefault());
+addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+
+/* ---------------- Physics / collision ---------------- */
+function moveAxis(axis,amount){
+  if(amount===0) return;
+  if(axis==='x') pos.x+=amount; else if(axis==='y') pos.y+=amount; else pos.z+=amount;
+  const minY=pos.y-EYE, maxY=minY+PHEIGHT;
+  const x0=Math.floor(pos.x-HW+EPS), x1=Math.floor(pos.x+HW-EPS);
+  const y0=Math.floor(minY+EPS), y1=Math.floor(maxY-EPS);
+  const z0=Math.floor(pos.z-HW+EPS), z1=Math.floor(pos.z+HW-EPS);
+  for(let yy=y0;yy<=y1;yy++)for(let xx=x0;xx<=x1;xx++)for(let zz=z0;zz<=z1;zz++){
+    if(!solidForCollision(xx,yy,zz)) continue;
+    if(axis==='x'){ pos.x = amount>0 ? xx-HW-EPS : (xx+1)+HW+EPS; vel.x=0; }
+    else if(axis==='z'){ pos.z = amount>0 ? zz-HW-EPS : (zz+1)+HW+EPS; vel.z=0; }
+    else { if(amount>0){ pos.y = yy+EYE-PHEIGHT-EPS; vel.y=0; } else { pos.y=(yy+1)+EYE+EPS; onGround=true; vel.y=0; } }
+    return;
+  }
+}
+function physics(dt){
+  const fwd=new THREE.Vector3(); camera.getWorldDirection(fwd); fwd.y=0;
+  if(fwd.lengthSq()>0) fwd.normalize();
+  const right=new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0,1,0)).normalize();
+  const sprint=keys['ShiftLeft']||keys['ShiftRight'];
+  const speed=sprint?SPRINT:WALK;
+  let wx=0,wz=0;
+  if(keys['KeyW']){wx+=fwd.x;wz+=fwd.z;}
+  if(keys['KeyS']){wx-=fwd.x;wz-=fwd.z;}
+  if(keys['KeyD']){wx+=right.x;wz+=right.z;}
+  if(keys['KeyA']){wx-=right.x;wz-=right.z;}
+  const wl=Math.hypot(wx,wz); if(wl>0){wx/=wl;wz/=wl;}
+  vel.x=wx*speed; vel.z=wz*speed;
+  vel.y+=GRAVITY*dt;
+  if(keys['Space'] && onGround){ vel.y=JUMP; onGround=false; }
+  moveAxis('x',vel.x*dt);
+  moveAxis('z',vel.z*dt);
+  onGround=false;
+  moveAxis('y',vel.y*dt);
+  if(!onGround && vel.y<=0){
+    const gy=Math.floor(pos.y-EYE-EPS);
+    if(solidForCollision(Math.floor(pos.x),gy,Math.floor(pos.z))) onGround=true;
+  }
+  if(pos.y<-12){
+    const sh=heightMap[Math.floor(SPAWN.x)+Math.floor(SPAWN.z)*SX];
+    pos.set(SPAWN.x, sh+1+EYE, SPAWN.z); vel.set(0,0,0);
+  }
+}
+
+/* ---------------- Loop ---------------- */
+let last=performance.now();
+function animate(){
+  requestAnimationFrame(animate);
+  const now=performance.now();
+  let dt=(now-last)/1000; last=now; if(dt>0.05) dt=0.05;
+  if(controls.isLocked) physics(dt);
+  pig.update(dt);
+  // target + highlight
+  target=raycastVoxel();
+  if(target){ highlight.visible=true; highlight.position.set(target.hit.x+0.5,target.hit.y+0.5,target.hit.z+0.5); }
+  else highlight.visible=false;
+  // sword swing
+  if(swordGroup.visible){
+    if(swingT>0){ swingT-=dt; const k=1-Math.max(0,swingT)/0.25; swordGroup.rotation.x=0.2-Math.sin(k*Math.PI)*1.15; swordGroup.rotation.z=0.12+Math.sin(k*Math.PI)*0.35; }
+    else { swordGroup.rotation.x=0.2; swordGroup.rotation.z=0.12; }
+  }
+  renderer.render(scene,camera);
+}
+animate();
+</script>
+</body>
+</html>

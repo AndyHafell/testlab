@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>VoxelCraft</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #87ceeb; }
+  body { font-family: "Trebuchet MS", "Segoe UI", system-ui, sans-serif; -webkit-user-select: none; user-select: none; }
+  canvas { display: block; }
+
+  /* ---- Crosshair ---- */
+  #crosshair {
+    position: fixed; left: 50%; top: 50%; width: 22px; height: 22px;
+    transform: translate(-50%, -50%); pointer-events: none; z-index: 20; opacity: 0;
+    transition: opacity .2s;
+  }
+  #crosshair.show { opacity: .85; }
+  #crosshair::before, #crosshair::after {
+    content: ""; position: absolute; background: #fff; box-shadow: 0 0 2px rgba(0,0,0,.7);
+  }
+  #crosshair::before { left: 10px; top: 0; width: 2px; height: 22px; }
+  #crosshair::after  { top: 10px; left: 0; height: 2px; width: 22px; }
+  #crosshair.hit::before, #crosshair.hit::after { background: #ff4d4d; }
+
+  /* ---- HUD ---- */
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 15; }
+
+  #hotbar {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+    display: flex; gap: 10px; opacity: 0; transition: opacity .25s;
+  }
+  #hotbar.show { opacity: 1; }
+  .slot {
+    min-width: 120px; padding: 10px 14px; border-radius: 8px;
+    background: rgba(20,20,28,.62); border: 2px solid rgba(255,255,255,.18);
+    color: #fff; font-size: 15px; text-align: center; line-height: 1.35;
+    text-shadow: 0 1px 2px #000;
+  }
+  .slot b { font-size: 19px; }
+  .slot.ready { border-color: #8fe388; box-shadow: 0 0 14px rgba(143,227,136,.5) inset; }
+
+  #prompt {
+    position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%);
+    color: #fff; font-size: 17px; text-shadow: 0 2px 4px #000; text-align: center;
+    background: rgba(20,20,28,.5); padding: 8px 16px; border-radius: 20px;
+    opacity: 0; transition: opacity .25s; white-space: nowrap;
+  }
+  #prompt.show { opacity: 1; }
+  .key {
+    display: inline-block; background: #f4f4f4; color: #222; border-radius: 5px;
+    padding: 1px 7px; font-weight: bold; font-size: 14px; margin: 0 2px;
+    box-shadow: 0 2px 0 #999; text-shadow: none;
+  }
+
+  #stats {
+    position: fixed; top: 14px; left: 14px; color: #fff; font-size: 15px;
+    text-shadow: 0 2px 3px #000; opacity: 0; transition: opacity .25s; line-height: 1.5;
+  }
+  #stats.show { opacity: 1; }
+
+  #toast {
+    position: fixed; left: 50%; top: 22%; transform: translate(-50%, -10px);
+    color: #fff; font-size: 24px; font-weight: bold; text-shadow: 0 2px 6px #000;
+    opacity: 0; transition: opacity .35s, transform .35s; pointer-events: none;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  /* ---- Pig health bars ---- */
+  #bars { position: fixed; inset: 0; pointer-events: none; z-index: 14; }
+  .pigbar {
+    position: absolute; width: 64px; height: 8px; transform: translate(-50%, -50%);
+    background: rgba(0,0,0,.55); border: 1px solid rgba(0,0,0,.7); border-radius: 4px;
+    display: none; overflow: hidden;
+  }
+  .pigfill { height: 100%; background: linear-gradient(#ff6b6b, #c92a2a); transition: width .12s; }
+
+  /* ---- Start / pause overlay ---- */
+  #overlay {
+    position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; cursor: pointer; text-align: center;
+    background: radial-gradient(circle at 50% 35%, rgba(40,60,90,.55), rgba(10,14,22,.88));
+    color: #fff; padding: 20px;
+  }
+  #overlay.hidden { display: none; }
+  #overlay h1 {
+    font-size: clamp(40px, 9vw, 80px); letter-spacing: 3px; margin-bottom: 6px;
+    text-shadow: 0 4px 0 #2b3a22, 0 6px 18px rgba(0,0,0,.6);
+  }
+  #overlay h1 span { color: #8fe388; }
+  #overlay .sub { font-size: 18px; opacity: .85; margin-bottom: 26px; }
+  #overlay .panel {
+    background: rgba(0,0,0,.32); border: 1px solid rgba(255,255,255,.15);
+    border-radius: 12px; padding: 20px 26px; max-width: 520px; line-height: 1.9; font-size: 16px;
+  }
+  #overlay .panel .row { display: flex; justify-content: space-between; gap: 24px; }
+  #overlay .panel .row span:last-child { opacity: .85; }
+  #overlay .goal { margin-top: 18px; font-size: 15px; opacity: .8; max-width: 520px; }
+  #overlay .play {
+    margin-top: 28px; font-size: 22px; font-weight: bold; color: #8fe388;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: .6; } 50% { opacity: 1; } }
+  #err { color: #ffd0d0; font-size: 14px; margin-top: 18px; max-width: 520px; }
+</style>
+</head>
+<body>
+  <div id="crosshair"></div>
+
+  <div id="hud">
+    <div id="stats"></div>
+    <div id="prompt"></div>
+    <div id="hotbar">
+      <div class="slot" id="slot-wood">🪵 Wood<br><b id="wood-count">0</b></div>
+      <div class="slot" id="slot-sword">🗡️ Sword<br><b id="sword-state">none</b></div>
+    </div>
+  </div>
+
+  <div id="bars"></div>
+  <div id="toast"></div>
+
+  <div id="overlay">
+    <h1>VOXEL<span>CRAFT</span></h1>
+    <div class="sub">A tiny Minecraft-style survival sandbox</div>
+    <div class="panel">
+      <div class="row"><span>Move</span><span><b>W A S D</b></span></div>
+      <div class="row"><span>Look</span><span><b>Mouse</b></span></div>
+      <div class="row"><span>Jump</span><span><b>Space</b></span></div>
+      <div class="row"><span>Sprint</span><span><b>Shift</b></span></div>
+      <div class="row"><span>Destroy block / Attack</span><span><b>Left Click</b></span></div>
+      <div class="row"><span>Craft sword</span><span><b>E</b></span></div>
+    </div>
+    <div class="goal">⛏️ Chop the tree for wood → press <b>E</b> to craft a sword → hunt the pigs! 🐷</div>
+    <div class="play">▶ Click to play</div>
+    <div id="err"></div>
+  </div>
+
+  <script>
+    // Friendly message if the three.js CDN can't be reached.
+    window.addEventListener('error', function (e) {
+      if (e && e.message && /import|module|fetch|three/i.test(e.message) && !window.__gameStarted) {
+        var el = document.getElementById('err');
+        if (el) el.textContent = '⚠ Could not load three.js. This page needs an internet connection (it loads three.js from a CDN).';
+      }
+    });
+  </script>
+
+  <script type="importmap">
+  { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+  </script>
+
+  <script type="module">
+  import * as THREE from 'three';
+  window.__gameStarted = true;
+
+  // ======================================================================
+  //  Constants
+  // ======================================================================
+  const HALF   = 24;          // world spans -HALF .. HALF-1 on x and z
+  const EYE    = 1.62;        // eye height above feet
+  const PH     = 1.8;         // player height
+  const PW     = 0.3;         // player half-width
+  const GRAV   = -26;
+  const JUMP   = 8.6;
+  const SPEED  = 5.2;
+  const SPRINT = 8.6;
+  const REACH  = 5.0;
+  const WOOD_NEEDED = 3;
+  const PIG_HP = 100;
+  const FIST_DMG = 20;
+  const SWORD_DMG = 50;
+
+  const COLORS = {
+    grass: 0x6cb04a, dirt: 0x946b41, stone: 0x9a9a9a, wood: 0x7a5230, leaves: 0x4e9e3f
+  };
+
+  // ======================================================================
+  //  Deterministic RNG + value-noise terrain
+  // ======================================================================
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  const rng = mulberry32(20240619);
+
+  function hash(x, z) {
+    const n = Math.sin(x * 127.1 + z * 311.7) * 43758.5453;
+    return n - Math.floor(n);
+  }
+  function smoothNoise(x, z) {
+    const x0 = Math.floor(x), z0 = Math.floor(z);
+    const fx = x - x0, fz = z - z0;
+    const u = fx * fx * (3 - 2 * fx), v = fz * fz * (3 - 2 * fz);
+    const a = hash(x0, z0), b = hash(x0 + 1, z0), c = hash(x0, z0 + 1), d = hash(x0 + 1, z0 + 1);
+    return a * (1 - u) * (1 - v) + b * u * (1 - v) + c * (1 - u) * v + d * u * v;
+  }
+  function fbm(x, z) {
+    let total = 0, amp = 1, freq = 1, max = 0;
+    for (let i = 0; i < 4; i++) { total += smoothNoise(x * freq, z * freq) * amp; max += amp; amp *= 0.5; freq *= 2; }
+    return total / max;
+  }
+
+  // ======================================================================
+  //  Renderer / scene / camera
+  // ======================================================================
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  const SKY = 0x9fd6ff;
+  scene.background = new THREE.Color(SKY);
+  scene.fog = new THREE.Fog(SKY, 32, 78);
+
+  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+  scene.add(camera);
+
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x6b8f5a, 0.95);
+  scene.add(hemi);
+  const sun = new THREE.DirectionalLight(0xfff4d6, 0.85);
+  sun.position.set(40, 80, 25);
+  scene.add(sun);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.2));
+
+  const tmpM = new THREE.Matrix4();
+  const tmpColor = new THREE.Color();
+  const tmpV = new THREE.Vector3();
+  const euler = new THREE.Euler(0, 0, 0, 'YXZ');
+
+  // ======================================================================
+  //  Voxel world  (InstancedMesh per block type, swap-remove on destroy)
+  // ======================================================================
+  const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+
+  class BlockField {
+    constructor(type, color, capacity) {
+      this.type = type;
+      this.base = new THREE.Color(color);
+      const mat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+      this.mesh = new THREE.InstancedMesh(boxGeo, mat, Math.max(1, capacity));
+      this.mesh.count = 0;
+      this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      this.mesh.userData.field = this;
+      this.cells = [];
+      this.shades = [];
+    }
+    add(i, j, k) {
+      const idx = this.mesh.count;
+      tmpM.makeTranslation(i + 0.5, j + 0.5, k + 0.5);
+      this.mesh.setMatrixAt(idx, tmpM);
+      const shade = 0.82 + rng() * 0.32;
+      tmpColor.copy(this.base).multiplyScalar(shade);
+      this.mesh.setColorAt(idx, tmpColor);
+      this.cells[idx] = { i, j, k };
+      this.shades[idx] = shade;
+      this.mesh.count++;
+      return idx;
+    }
+    // Removes instance at idx by swapping in the last instance.
+    // Returns the cell that was moved (or null), so the solid map can be fixed.
+    remove(idx) {
+      const last = this.mesh.count - 1;
+      let moved = null;
+      if (idx !== last) {
+        this.mesh.getMatrixAt(last, tmpM);
+        this.mesh.setMatrixAt(idx, tmpM);
+        this.shades[idx] = this.shades[last];
+        tmpColor.copy(this.base).multiplyScalar(this.shades[idx]);
+        this.mesh.setColorAt(idx, tmpColor);
+        this.cells[idx] = this.cells[last];
+        moved = this.cells[idx];
+      }
+      this.mesh.count--;
+      this.cells.length = this.mesh.count;
+      this.shades.length = this.mesh.count;
+      this.mesh.instanceMatrix.needsUpdate = true;
+      if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+      return moved;
+    }
+  }
+
+  const solid = new Map();          // "i,j,k" -> { field, idx, type }
+  const heightMap = new Map();      // "i,k"   -> top grass y
+  const blockLists = { grass: [], dirt: [], stone: [], wood: [], leaves: [] };
+  const placed = new Set();
+
+  const K = (i, j, k) => i + ',' + j + ',' + k;
+  const colHeight = (i, k) => { const v = heightMap.get(i + ',' + k); return v === undefined ? 0 : v; };
+  const surfaceAt = (x, z) => colHeight(Math.floor(x), Math.floor(z)) + 1;
+  const isSolid = (i, j, k) => solid.has(K(i, j, k));
+
+  function queueBlock(i, j, k, type) {
+    const key = K(i, j, k);
+    if (placed.has(key)) return;
+    placed.add(key);
+    blockLists[type].push({ i, j, k });
+  }
+
+  // --- terrain ---
+  for (let i = -HALF; i < HALF; i++) {
+    for (let k = -HALF; k < HALF; k++) {
+      const h = Math.floor(fbm((i + 1000) * 0.08, (k + 1000) * 0.08) * 8);
+      heightMap.set(i + ',' + k, h);
+      queueBlock(i, h, k, 'grass');
+      queueBlock(i, h - 1, k, 'dirt');
+      queueBlock(i, h - 2, k, 'dirt');
+      queueBlock(i, h - 3, k, 'stone');
+      queueBlock(i, h - 4, k, 'stone');
+    }
+  }
+
+  // --- trees ---
+  function plantTree(cx, cz) {
+    const base = colHeight(cx, cz) + 1;
+    const th = 4;
+    const topY = base + th - 1;
+    for (let y = base; y < base + th; y++) queueBlock(cx, y, cz, 'wood');
+    for (let dy = -1; dy <= 0; dy++)
+      for (let dx = -2; dx <= 2; dx++)
+        for (let dz = -2; dz <= 2; dz++) {
+          if (Math.abs(dx) === 2 && Math.abs(dz) === 2) continue;
+          queueBlock(cx + dx, topY + dy, cz + dz, 'leaves');
+        }
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dz = -1; dz <= 1; dz++) queueBlock(cx + dx, topY + 1, cz + dz, 'leaves');
+    queueBlock(cx, topY + 2, cz, 'leaves');
+    queueBlock(cx + 1, topY + 2, cz, 'leaves');
+    queueBlock(cx - 1, topY + 2, cz, 'leaves');
+    queueBlock(cx, topY + 2, cz + 1, 'leaves');
+    queueBlock(cx, topY + 2, cz - 1, 'leaves');
+  }
+  plantTree(4, 3);   // a tree right by spawn so it's easy to find
+  plantTree(-6, 5);
+  for (let n = 0; n < 6; n++) {
+    const cx = Math.floor(rng() * 42) - 21;
+    const cz = Math.floor(rng() * 42) - 21;
+    if (Math.abs(cx) < 2 && Math.abs(cz) < 2) continue;
+    plantTree(cx, cz);
+  }
+
+  // --- build instanced meshes ---
+  const blockMeshes = [];
+  for (const type of Object.keys(blockLists)) {
+    const list = blockLists[type];
+    const field = new BlockField(type, COLORS[type], list.length);
+    for (let n = 0; n < list.length; n++) {
+      const c = list[n];
+      const idx = field.add(c.i, c.j, c.k);
+      solid.set(K(c.i, c.j, c.k), { field, idx, type });
+    }
+    field.mesh.instanceMatrix.needsUpdate = true;
+    if (field.mesh.instanceColor) field.mesh.instanceColor.needsUpdate = true;
+    scene.add(field.mesh);
+    blockMeshes.push(field.mesh);
+  }
+
+  function destroyCell(i, j, k) {
+    const key = K(i, j, k);
+    const e = solid.get(key);
+    if (!e) return null;
+    const idx = e.idx;
+    const moved = e.field.remove(idx);
+    if (moved) {
+      const me = solid.get(K(moved.i, moved.j, moved.k));
+      if (me) me.idx = idx;
+    }
+    solid.delete(key);
+    return e.type;
+  }
+
+  // block highlight (wireframe cube over the targeted block)
+  const highlight = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(1.02, 1.02, 1.02)),
+    new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.4 })
+  );
+  highlight.visible = false;
+  scene.add(highlight);
+
+  // ======================================================================
+  //  Player
+  // ======================================================================
+  const player = {
+    pos: new THREE.Vector3(0.5, surfaceAt(0.5, 0.5) + 0.3, 0.5),
+    vel: new THREE.Vector3(0, 0, 0),
+    onGround: false
+  };
+  let yaw = 0, pitch = 0;
+
+  function collideAxis(axis, delta) {
+    const p = player.pos;
+    for (let iter = 0; iter < 3; iter++) {
+      const x0 = Math.floor(p.x - PW), x1 = Math.floor(p.x + PW);
+      const y0 = Math.floor(p.y),       y1 = Math.floor(p.y + PH);
+      const z0 = Math.floor(p.z - PW), z1 = Math.floor(p.z + PW);
+      let hit = false;
+      for (let i = x0; i <= x1 && !hit; i++)
+        for (let j = y0; j <= y1 && !hit; j++)
+          for (let k = z0; k <= z1 && !hit; k++) {
+            if (!isSolid(i, j, k)) continue;
+            hit = true;
+            if (axis === 'x') {
+              if (delta > 0) p.x = i - PW; else if (delta < 0) p.x = i + 1 + PW;
+              player.vel.x = 0;
+            } else if (axis === 'z') {
+              if (delta > 0) p.z = k - PW; else if (delta < 0) p.z = k + 1 + PW;
+              player.vel.z = 0;
+            } else {
+              if (delta > 0) { p.y = j - PH; player.vel.y = 0; }
+              else if (delta < 0) { p.y = j + 1; player.vel.y = 0; player.onGround = true; }
+            }
+          }
+      if (!hit) break;
+    }
+  }
+
+  // ======================================================================
+  //  Sword viewmodel (held in view once crafted)
+  // ======================================================================
+  const swordGroup = new THREE.Group();
+  {
+    const bladeMat = new THREE.MeshLambertMaterial({ color: 0xdcdce4, depthTest: false, depthWrite: false });
+    const handleMat = new THREE.MeshLambertMaterial({ color: 0x6b4423, depthTest: false, depthWrite: false });
+    const guardMat = new THREE.MeshLambertMaterial({ color: 0xb8902a, depthTest: false, depthWrite: false });
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.7, 0.07), bladeMat);
+    blade.position.y = 0.45;
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.07, 0.1), guardMat);
+    guard.position.y = 0.1;
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.22, 0.08), handleMat);
+    handle.position.y = -0.05;
+    swordGroup.add(blade, guard, handle);
+    swordGroup.traverse(o => { if (o.isMesh) o.renderOrder = 999; });
+  }
+  const swordBase = { x: -0.35, y: 0.2, z: -0.2 };
+  swordGroup.position.set(0.45, -0.42, -0.75);
+  swordGroup.rotation.set(swordBase.x, swordBase.y, swordBase.z);
+  swordGroup.visible = false;
+  camera.add(swordGroup);
+
+  let swinging = false, swingT = 0;
+  function swing() { swinging = true; swingT = 0; }
+
+  // ======================================================================
+  //  Pigs
+  // ======================================================================
+  const pigs = [];
+  const barsEl = document.getElementById('bars');
+
+  function buildPig() {
+    const g = new THREE.Group();
+    const pink = new THREE.MeshLambertMaterial({ color: 0xf2a0a8 });
+    const snoutMat = new THREE.MeshLambertMaterial({ color: 0xe07b88 });
+    const mk = (w, h, d, mat, x, y, z) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      m.position.set(x, y, z);
+      g.add(m);
+      return m;
+    };
+    mk(1.25, 0.85, 0.85, pink, 0, 0.95, 0);        // body
+    const head = mk(0.62, 0.62, 0.55, pink, 0, 1.05, 0.62); // head (faces +z)
+    mk(0.34, 0.26, 0.16, snoutMat, 0, 0.98, 0.93); // snout
+    mk(0.12, 0.12, 0.06, pink, -0.18, 1.32, 0.6);  // ear L
+    mk(0.12, 0.12, 0.06, pink, 0.18, 1.32, 0.6);   // ear R
+    mk(0.07, 0.18, 0.07, pink, 0, 1.0, -0.5);      // tail
+    const legs = [];
+    const lp = [[-0.4, 0.38], [0.4, 0.38], [-0.4, -0.38], [0.4, -0.38]];
+    for (const [lx, lz] of lp) {
+      const leg = mk(0.26, 0.55, 0.26, pink, lx, 0.27, lz);
+      legs.push(leg);
+    }
+    g.traverse(o => { if (o.isMesh) o.castShadow = false; });
+    return { group: g, mats: [pink, snoutMat], legs };
+  }
+
+  function spawnPig(x, z) {
+    const built = buildPig();
+    const pig = {
+      group: built.group, mats: built.mats, legs: built.legs,
+      x, z, rot: rng() * Math.PI * 2, health: PIG_HP,
+      aiT: rng() * 2, moving: rng() > 0.4, walkT: 0,
+      hurtT: 0, fleeT: 0, damaged: false, dead: false, deathT: 0, removed: false
+    };
+    built.group.position.set(x, surfaceAt(x, z), z);
+    built.group.rotation.y = pig.rot;
+    built.group.traverse(o => { o.userData.pigRef = pig; });
+    scene.add(built.group);
+
+    const bar = document.createElement('div');
+    bar.className = 'pigbar';
+    const fill = document.createElement('div');
+    fill.className = 'pigfill';
+    fill.style.width = '100%';
+    bar.appendChild(fill);
+    barsEl.appendChild(bar);
+    pig.barEl = bar; pig.barFill = fill;
+
+    pigs.push(pig);
+    return pig;
+  }
+
+  for (let n = 0; n < 3; n++) {
+    const a = rng() * Math.PI * 2, r = 7 + rng() * 8;
+    spawnPig(Math.cos(a) * r, Math.sin(a) * r);
+  }
+
+  function updatePig(pig, dt) {
+    const g = pig.group;
+    if (pig.dead) {
+      pig.deathT += dt;
+      const p = Math.min(pig.deathT / 0.8, 1);
+      g.rotation.z = p * (Math.PI / 2) * 0.9;
+      g.scale.setScalar(1 - p * 0.7);
+      if (p >= 1 && !pig.removed) {
+        pig.removed = true;
+        scene.remove(g);
+        if (pig.barEl) pig.barEl.remove();
+      }
+      return;
+    }
+
+    if (pig.hurtT > 0) { pig.hurtT -= dt; pig.mats.forEach(m => m.emissive.setHex(0x771717)); }
+    else pig.mats.forEach(m => m.emissive.setHex(0x000000));
+
+    pig.aiT -= dt;
+    if (pig.aiT <= 0) {
+      pig.aiT = 1.2 + rng() * 2.6;
+      pig.moving = rng() > 0.35;
+      if (pig.moving && pig.fleeT <= 0) pig.rot = rng() * Math.PI * 2;
+    }
+
+    let speed = 0;
+    if (pig.fleeT > 0) { pig.fleeT -= dt; speed = 4.4; pig.moving = true; }
+    else if (pig.moving) speed = 1.7;
+
+    if (speed > 0) {
+      let nx = pig.x + Math.sin(pig.rot) * speed * dt;
+      let nz = pig.z + Math.cos(pig.rot) * speed * dt;
+      const cx = Math.max(-HALF + 1, Math.min(HALF - 2, nx));
+      const cz = Math.max(-HALF + 1, Math.min(HALF - 2, nz));
+      if (cx !== nx || cz !== nz) pig.rot = rng() * Math.PI * 2;
+      pig.x = cx; pig.z = cz;
+      g.rotation.y = pig.rot;
+      pig.walkT += dt * 9;
+      const sw = Math.sin(pig.walkT) * 0.5;
+      pig.legs[0].rotation.x = sw;  pig.legs[1].rotation.x = -sw;
+      pig.legs[2].rotation.x = -sw; pig.legs[3].rotation.x = sw;
+    } else {
+      pig.legs.forEach(l => l.rotation.x *= 0.8);
+    }
+    g.position.set(pig.x, surfaceAt(pig.x, pig.z), pig.z);
+  }
+
+  function damagePig(pig) {
+    if (pig.dead) return;
+    pig.health -= (hasSword ? SWORD_DMG : FIST_DMG);
+    pig.damaged = true;
+    pig.hurtT = 0.25;
+    pig.fleeT = 1.3;
+    // flee directly away from the player
+    const dx = pig.x - player.pos.x, dz = pig.z - player.pos.z;
+    pig.rot = Math.atan2(dx, dz);
+    pig.x = Math.max(-HALF + 1, Math.min(HALF - 2, pig.x + Math.sin(pig.rot) * 0.45));
+    pig.z = Math.max(-HALF + 1, Math.min(HALF - 2, pig.z + Math.cos(pig.rot) * 0.45));
+    if (pig.health <= 0) {
+      pig.dead = true; pig.deathT = 0; kills++;
+      updateHUD();
+      toast('🐷  Pig defeated!');
+      setTimeout(() => {
+        const a = rng() * Math.PI * 2, r = 8 + rng() * 10;
+        spawnPig(Math.cos(a) * r, Math.sin(a) * r);
+      }, 4000);
+    }
+  }
+
+  function updateBars() {
+    for (const pig of pigs) {
+      if (!pig.barEl) continue;
+      if (pig.dead || !pig.damaged) { pig.barEl.style.display = 'none'; continue; }
+      tmpV.set(pig.x, surfaceAt(pig.x, pig.z) + 1.75, pig.z).project(camera);
+      if (tmpV.z > 1) { pig.barEl.style.display = 'none'; continue; }
+      pig.barEl.style.display = 'block';
+      pig.barEl.style.left = (tmpV.x * 0.5 + 0.5) * window.innerWidth + 'px';
+      pig.barEl.style.top = (-tmpV.y * 0.5 + 0.5) * window.innerHeight + 'px';
+      pig.barFill.style.width = Math.max(0, (pig.health / PIG_HP) * 100) + '%';
+    }
+  }
+
+  // ======================================================================
+  //  Inventory / HUD
+  // ======================================================================
+  let wood = 0, hasSword = false, kills = 0;
+
+  const el = {
+    crosshair: document.getElementById('crosshair'),
+    stats: document.getElementById('stats'),
+    hotbar: document.getElementById('hotbar'),
+    prompt: document.getElementById('prompt'),
+    woodCount: document.getElementById('wood-count'),
+    swordState: document.getElementById('sword-state'),
+    slotSword: document.getElementById('slot-sword'),
+    toast: document.getElementById('toast'),
+    overlay: document.getElementById('overlay')
+  };
+
+  function updateHUD() {
+    el.woodCount.textContent = wood;
+    el.swordState.textContent = hasSword ? 'ready' : 'none';
+    el.slotSword.classList.toggle('ready', hasSword);
+    el.stats.textContent = '🐷 Pigs defeated: ' + kills;
+
+    let html = '';
+    if (!hasSword && wood >= WOOD_NEEDED) html = 'Press <span class="key">E</span> to craft a Sword';
+    else if (!hasSword) html = 'Chop the tree — need <b>' + WOOD_NEEDED + '</b> wood (you have ' + wood + ')';
+    else html = 'Sword ready — go hunt the pigs! 🐷';
+    el.prompt.innerHTML = html;
+  }
+
+  let toastTimer = null;
+  function toast(msg) {
+    el.toast.textContent = msg;
+    el.toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.toast.classList.remove('show'), 1600);
+  }
+
+  function craftSword() {
+    if (hasSword || wood < WOOD_NEEDED) return;
+    wood -= WOOD_NEEDED;
+    hasSword = true;
+    swordGroup.visible = true;
+    toast('🗡️  Crafted a Sword!');
+    updateHUD();
+  }
+
+  // ======================================================================
+  //  Targeting (raycast from screen center) + actions
+  // ======================================================================
+  const raycaster = new THREE.Raycaster();
+  const CENTER = new THREE.Vector2(0, 0);
+  let target = null;
+
+  function alivePigGroups() {
+    const out = [];
+    for (const p of pigs) if (!p.dead) out.push(p.group);
+    return out;
+  }
+
+  function updateTarget() {
+    raycaster.far = REACH;
+    raycaster.setFromCamera(CENTER, camera);
+    const bHits = raycaster.intersectObjects(blockMeshes, false);
+    const pHits = raycaster.intersectObjects(alivePigGroups(), true);
+    const bd = bHits.length ? bHits[0].distance : Infinity;
+    const pd = pHits.length ? pHits[0].distance : Infinity;
+
+    target = null;
+    highlight.visible = false;
+    el.crosshair.classList.remove('hit');
+
+    if (pd <= bd && pHits.length) {
+      const pig = pHits[0].object.userData.pigRef;
+      if (pig) { target = { kind: 'pig', pig }; el.crosshair.classList.add('hit'); }
+    } else if (bHits.length) {
+      const field = bHits[0].object.userData.field;
+      const c = field.cells[bHits[0].instanceId];
+      if (c) {
+        target = { kind: 'block', cell: c };
+        highlight.position.set(c.i + 0.5, c.j + 0.5, c.k + 0.5);
+        highlight.visible = true;
+      }
+    }
+  }
+
+  function attack() {
+    swing();
+    if (!target) return;
+    if (target.kind === 'pig') {
+      damagePig(target.pig);
+    } else if (target.kind === 'block') {
+      const c = target.cell;
+      const type = destroyCell(c.i, c.j, c.k);
+      if (type === 'wood') { wood++; toast('+1 🪵 Wood'); updateHUD(); }
+    }
+  }
+
+  // ======================================================================
+  //  Input
+  // ======================================================================
+  const keys = {};
+  let locked = false;
+
+  el.overlay.addEventListener('click', () => renderer.domElement.requestPointerLock());
+
+  document.addEventListener('pointerlockchange', () => {
+    locked = document.pointerLockElement === renderer.domElement;
+    el.overlay.classList.toggle('hidden', locked);
+    el.crosshair.classList.toggle('show', locked);
+    el.hotbar.classList.toggle('show', locked);
+    el.prompt.classList.toggle('show', locked);
+    el.stats.classList.toggle('show', locked);
+    if (!locked) el.overlay.querySelector('.play').textContent = '▶ Click to resume';
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!locked) return;
+    yaw -= e.movementX * 0.0022;
+    pitch -= e.movementY * 0.0022;
+    pitch = Math.max(-1.55, Math.min(1.55, pitch));
+  });
+
+  document.addEventListener('mousedown', e => {
+    if (locked && e.button === 0) attack();
+  });
+
+  document.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (!locked) return;
+    if (e.code === 'Space') e.preventDefault();
+    if (e.code === 'KeyE') craftSword();
+  });
+  document.addEventListener('keyup', e => { keys[e.code] = false; });
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // ======================================================================
+  //  Main loop
+  // ======================================================================
+  const clock = new THREE.Clock();
+
+  function updatePlayer(dt) {
+    // horizontal input relative to yaw
+    const fx = -Math.sin(yaw), fz = -Math.cos(yaw);   // forward
+    const rx = Math.cos(yaw),  rz = -Math.sin(yaw);   // right
+    let f = (keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0);
+    let s = (keys['KeyD'] ? 1 : 0) - (keys['KeyA'] ? 1 : 0);
+    let dx = fx * f + rx * s, dz = fz * f + rz * s;
+    const len = Math.hypot(dx, dz);
+    const spd = (keys['ShiftLeft'] || keys['ShiftRight']) ? SPRINT : SPEED;
+    if (len > 0) { dx = dx / len * spd; dz = dz / len * spd; }
+
+    if (keys['Space'] && player.onGround) { player.vel.y = JUMP; player.onGround = false; }
+
+    player.vel.y += GRAV * dt;
+    if (player.vel.y < -55) player.vel.y = -55;
+
+    const mx = dx * dt, mz = dz * dt, my = player.vel.y * dt;
+    player.pos.x += mx; collideAxis('x', mx);
+    player.pos.z += mz; collideAxis('z', mz);
+    player.onGround = false;
+    player.pos.y += my; collideAxis('y', my);
+
+    // fell out of the world -> respawn
+    if (player.pos.y < -25) {
+      player.pos.set(0.5, surfaceAt(0.5, 0.5) + 0.3, 0.5);
+      player.vel.set(0, 0, 0);
+      toast('Respawned');
+    }
+
+    camera.position.set(player.pos.x, player.pos.y + EYE, player.pos.z);
+    euler.set(pitch, yaw, 0, 'YXZ');
+    camera.quaternion.setFromEuler(euler);
+  }
+
+  function updateSword(dt) {
+    if (!hasSword) return;
+    if (swinging) {
+      swingT += dt / 0.22;
+      if (swingT >= 1) { swinging = false; swordGroup.rotation.x = swordBase.x; }
+      else swordGroup.rotation.x = swordBase.x - Math.sin(swingT * Math.PI) * 1.5;
+    }
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+    const dt = Math.min(clock.getDelta(), 0.05);
+
+    if (locked) updatePlayer(dt);
+    for (const pig of pigs) updatePig(pig, dt);
+    updateSword(dt);
+    updateTarget();
+    updateBars();
+
+    renderer.render(scene, camera);
+  }
+
+  updateHUD();
+  animate();
+  </script>
+</body>
+</html>

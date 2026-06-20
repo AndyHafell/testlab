@@ -1,0 +1,24 @@
+{
+  "name": "write-on-typewriter",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Word-synced typewriter write-on animation from ElevenLabs Scribe timestamps (Remotion).",
+  "scripts": {
+    "dev": "remotion studio",
+    "render": "remotion render src/index.ts WriteOn out/write-on.mp4 --overwrite",
+    "transcribe": "node scripts/transcribe.mjs",
+    "test": "node --test src/transcript.test.ts"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "typescript": "^5.7.0"
+  }
+}

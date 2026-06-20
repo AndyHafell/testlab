@@ -1,0 +1,17 @@
+{
+  "name": "video-factory",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Faithful in-browser replica of the CM2.2 viral-short pipeline: twitterapi.io → AI script → ElevenLabs TTS → Replicate lipsync → ffmpeg combine + Scribe captions → vertical MP4.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
+}

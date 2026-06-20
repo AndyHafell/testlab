@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Seiko 7S26 — 3D Movement</title>
+<style>
+  :root{
+    --gold:#c8a04c; --gold-l:#ffe9a8; --gold-d:#7a5e1e;
+    --panel:rgba(18,15,9,.72); --line:rgba(200,160,76,.35);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:#050507;
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;color:#e9e2cf;}
+  #app{position:fixed;inset:0}
+  canvas{display:block}
+  body::before{content:"";position:fixed;inset:0;z-index:-1;
+    background:radial-gradient(125% 95% at 50% 32%, #1d1826 0%, #0b0b12 46%, #050507 100%);}
+
+  #title{position:fixed;top:18px;left:22px;z-index:5;pointer-events:none}
+  #title b{display:block;font-size:15px;letter-spacing:.32em;color:var(--gold-l);
+    text-shadow:0 1px 10px rgba(0,0,0,.85)}
+  #title span{display:block;margin-top:6px;font-size:10.5px;letter-spacing:.22em;color:#9b9079}
+  #title .tickrow{display:flex;align-items:center;gap:8px;margin-top:9px;
+    font-size:10px;letter-spacing:.18em;color:#bcae8c}
+  #tickdot{width:9px;height:9px;border-radius:50%;background:#5a1418;
+    box-shadow:0 0 0 1px rgba(255,210,120,.25);transition:background .05s}
+  #tickdot.flash{background:#ff5a5a;box-shadow:0 0 10px 2px rgba(255,70,70,.7)}
+
+  #legend{position:fixed;top:18px;right:20px;z-index:5;pointer-events:none;
+    background:var(--panel);border:1px solid var(--line);border-radius:9px;
+    padding:10px 13px;backdrop-filter:blur(8px);font-size:10px;letter-spacing:.04em}
+  #legend .h{color:var(--gold-l);letter-spacing:.2em;font-size:9.5px;margin-bottom:6px}
+  #legend div{display:flex;align-items:center;gap:8px;margin:3px 0;color:#c9c1ad}
+  #legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
+
+  #panel{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:5;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:14px 22px 16px;backdrop-filter:blur(10px);
+    box-shadow:0 12px 40px rgba(0,0,0,.55);min-width:430px}
+  #panel .top{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:11px}
+  #panel .lbl{font-size:10px;letter-spacing:.22em;color:#bcae8c}
+  #panel .lbl b{color:var(--gold-l)}
+  #play{background:linear-gradient(#2a2412,#16120a);color:var(--gold-l);
+    border:1px solid var(--line);border-radius:7px;padding:6px 14px;cursor:pointer;
+    font:inherit;font-size:11px;letter-spacing:.12em;transition:.15s}
+  #play:hover{border-color:var(--gold);color:#fff}
+  .range-wrap{position:relative;height:26px;display:flex;align-items:center}
+  .range-wrap .ends{position:absolute;inset:0;display:flex;justify-content:space-between;
+    align-items:center;font-size:9px;letter-spacing:.18em;color:#7d735a;pointer-events:none}
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:6px;
+    border-radius:4px;outline:none;cursor:pointer;
+    background:linear-gradient(90deg,#3a2f12,#7a6128 50%,#3a2f12);
+    box-shadow:inset 0 1px 3px rgba(0,0,0,.6)}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;
+    border-radius:50%;border:1px solid #2a230f;cursor:grab;
+    background:radial-gradient(circle at 32% 30%,#ffe9a8,#c8a04c 58%,#7a5e1e);
+    box-shadow:0 2px 7px rgba(0,0,0,.7)}
+  input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;
+    border:1px solid #2a230f;cursor:grab;
+    background:radial-gradient(circle at 32% 30%,#ffe9a8,#c8a04c 58%,#7a5e1e)}
+  #hint{position:fixed;bottom:8px;left:50%;transform:translateX(-50%);z-index:4;
+    font-size:9px;letter-spacing:.18em;color:#5f5847;pointer-events:none}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="title">
+  <b>SEIKO 7S26</b>
+  <span>21,600 bph · automatic calibre</span>
+  <div class="tickrow"><span id="tickdot"></span><span id="bpm">6 ticks / sec</span></div>
+</div>
+
+<div id="legend">
+  <div class="h">GEAR TRAIN</div>
+  <div><i style="background:#c8a04c"></i>Mainspring barrel</div>
+  <div><i style="background:#b8902f"></i>Center / 3rd / 4th wheel</div>
+  <div><i style="background:#aab0b8"></i>Escape wheel</div>
+  <div><i style="background:#4a4f57"></i>Pallet fork</div>
+  <div><i style="background:#2a4bbf"></i>Balance &amp; hairspring</div>
+  <div><i style="background:#e11d2a"></i>Jewel bearings</div>
+</div>
+
+<div id="panel">
+  <div class="top">
+    <span class="lbl">ASSEMBLE&nbsp;&nbsp;◀&nbsp;&nbsp;<b id="exval">0%</b>&nbsp;&nbsp;▶&nbsp;&nbsp;EXPLODE</span>
+    <button id="play">❚❚&nbsp;PAUSE</button>
+  </div>
+  <div class="range-wrap">
+    <input type="range" id="explode" min="0" max="1" step="0.001" value="0">
+  </div>
+</div>
+
+<div id="hint">drag to orbit · scroll to zoom · space to pause</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+
+<script type="module">
+/* === SEIKO 7S26 — interactive 3D movement ===========================
+   Train: mainspring barrel -> center -> third -> fourth -> escape wheel
+          -> pallet fork -> balance wheel (hairspring).
+   Balance: 3 Hz oscillation = 6 beats/sec = 21,600 bph. Every beat the
+   escape wheel unlocks one tooth and the whole train lurches forward.
+   One slider assembles / explodes every component.
+====================================================================== */
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+/* ---------- renderer / scene / camera ----------------------------- */
+const app = document.getElementById('app');
+const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(48, innerWidth/innerHeight, 0.1, 800);
+camera.position.set(38, 54, 50);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.07;
+controls.target.set(-2, 4, 0);
+controls.minDistance = 18;
+controls.maxDistance = 160;
+controls.maxPolarAngle = Math.PI * 0.52;
+
+/* ---------- lights (warm key + cool fill) ------------------------- */
+scene.add(new THREE.HemisphereLight(0xfff0d6, 0x141018, 0.55));
+const key = new THREE.DirectionalLight(0xfff2d8, 2.1);
+key.position.set(22, 40, 18);
+scene.add(key);
+const fill = new THREE.DirectionalLight(0x88aaff, 0.6);
+fill.position.set(-30, 20, -18);
+scene.add(fill);
+const rim = new THREE.PointLight(0xffd9a0, 1.2, 120, 2);
+rim.position.set(-18, 16, 24);
+scene.add(rim);
+
+/* ---------- materials --------------------------------------------- */
+const M = {
+  plate:   new THREE.MeshStandardMaterial({ color:0xc09a3e, metalness:1.0, roughness:0.42 }),
+  brass:   new THREE.MeshStandardMaterial({ color:0xc8a04c, metalness:1.0, roughness:0.34 }),
+  brassD:  new THREE.MeshStandardMaterial({ color:0xb08530, metalness:1.0, roughness:0.40 }),
+  steel:   new THREE.MeshStandardMaterial({ color:0xaab0b8, metalness:1.0, roughness:0.22 }),
+  steelD:  new THREE.MeshStandardMaterial({ color:0x4a4f57, metalness:1.0, roughness:0.28 }),
+  blue:    new THREE.MeshPhysicalMaterial({ color:0x2a4bbf, metalness:0.85, roughness:0.30, clearcoat:0.9, clearcoatRoughness:0.25 }),
+  spring:  new THREE.MeshStandardMaterial({ color:0x3a6be0, metalness:0.7, roughness:0.4 }),
+  ruby:    new THREE.MeshPhysicalMaterial({ color:0xe11d2a, metalness:0.0, roughness:0.08, transmission:0.0, emissive:0x4a0a10, emissiveIntensity:0.5, transparent:true, opacity:0.92 }),
+  saph:    new THREE.MeshPhysicalMaterial({ color:0x1e5fe0, metalness:0.0, roughness:0.08, emissive:0x08184a, emissiveIntensity:0.5, transparent:true, opacity:0.92 }),
+  goldScrew: new THREE.MeshStandardMaterial({ color:0xd8b85e, metalness:1.0, roughness:0.3 }),
+  slot:    new THREE.MeshStandardMaterial({ color:0x0c0a06, metalness:0.6, roughness:0.5 }),
+};
+
+/* ---------- gear-shape helpers ------------------------------------ */
+function gearShape(teeth, tipR, rootR){
+  const s = new THREE.Shape(), step = (Math.PI*2)/teeth, pts=[];
+  for(let i=0;i<teeth;i++){ const a=i*step;
+    pts.push([rootR, a+step*0.00],[rootR, a+step*0.18],
+             [tipR,  a+step*0.34],[tipR,  a+step*0.50],[tipR, a+step*0.66],
+             [rootR, a+step*0.82]); }
+  pts.forEach(([r,ang],i)=>{ const x=Math.cos(ang)*r, y=Math.sin(ang)*r;
+    i?s.lineTo(x,y):s.moveTo(x,y); });
+  s.closePath(); return s;
+}
+function escapeShape(teeth, tipR, rootR){ // ratchet / asymmetric teeth
+  const s = new THREE.Shape(), step = (Math.PI*2)/teeth, pts=[];
+  for(let i=0;i<teeth;i++){ const a=i*step;
+    pts.push([rootR, a+step*0.00],[tipR, a+step*0.16],
+             [tipR,  a+step*0.34],[rootR, a+step*0.72]); }
+  pts.forEach(([r,ang],i)=>{ const x=Math.cos(ang)*r, y=Math.sin(ang)*r;
+    i?s.lineTo(x,y):s.moveTo(x,y); });
+  s.closePath(); return s;
+}
+function gearMesh(teeth, tipR, rootR, thick, mat, holeR, spoke, escape){
+  const shape = escape? escapeShape(teeth,tipR,rootR) : gearShape(teeth,tipR,rootR);
+  if(holeR){ const h=new THREE.Path(); h.absarc(0,0,holeR,0,Math.PI*2,true); shape.holes.push(h); }
+  if(spoke){ for(let k=0;k<3;k++){ const ang=k*Math.PI*2/3;
+    const h=new THREE.Path(); h.absarc(Math.cos(ang)*spoke.r, Math.sin(ang)*spoke.r, spoke.hole, 0, Math.PI*2, true);
+    shape.holes.push(h); } }
+  const geo = new THREE.ExtrudeGeometry(shape, { depth:thick, bevelEnabled:true,
+    bevelThickness:0.07, bevelSize:0.07, bevelSegments:1, steps:1, curveSegments:6 });
+  geo.rotateX(Math.PI/2); geo.center();
+  const m = new THREE.Mesh(geo, mat); m.castShadow=true; return m;
+}
+
+/* a wheel = toothed ring + hub (group, axle = local Y, disk centred at 0) */
+function makeWheel(cfg){
+  const g = new THREE.Group();
+  const spoke = cfg.spoke ? { r: cfg.tipR*0.5, hole: cfg.tipR*0.16 } : null;
+  g.add(gearMesh(cfg.teeth, cfg.tipR, cfg.rootR, cfg.thick, cfg.mat, cfg.hubR, spoke, cfg.escape));
+  // hub
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(cfg.hubR*0.9, cfg.hubR*0.9, cfg.thick*1.4, 20), M.steel);
+  g.add(hub);
+  return g;
+}
+
+/* spiral curve for hairspring / mainspring */
+class Spiral extends THREE.Curve {
+  constructor(r0,r1,turns){ super(); this.r0=r0; this.r1=r1; this.turns=turns; }
+  getPoint(t){ const a=t*Math.PI*2*this.turns, r=this.r0+(this.r1-this.r0)*t;
+    return new THREE.Vector3(Math.cos(a)*r, 0, Math.sin(a)*r); }
+}
+
+/* ---------- small detail helpers ---------------------------------- */
+function addScrew(parent, x, z, y, r=1.0){
+  const g = new THREE.Group();
+  const head = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.6, 18), M.goldScrew);
+  head.position.y = y; g.add(head);
+  const slot = new THREE.Mesh(new THREE.BoxGeometry(r*1.5, 0.12, r*0.28), M.slot);
+  slot.position.set(0, y+0.32, 0); slot.rotation.y = 0.6; g.add(slot);
+  g.position.set(x, 0, z); parent.add(g);
+}
+function addJewel(parent, x, z, y, r=1.1){
+  const g = new THREE.Group();
+  const chaton = new THREE.Mesh(new THREE.CylinderGeometry(r*1.5, r*1.5, 0.5, 20), M.goldScrew);
+  chaton.position.y = y; g.add(chaton);
+  const stone = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.7, 18), M.ruby);
+  stone.position.y = y+0.4; g.add(stone);
+  g.position.set(x,0,z); parent.add(g);
+}
+
+/* ---------- layout (plan positions x,z and stacked axle heights) -- */
+/* meshing pairs touch: barrel<->center pinion, center wheel<->third pinion, ... */
+const A = {
+  barrel: { x:0,      z:0,      wheelY:1.7, pinionY:1.7, teeth:72, tipR:13,  rootR:11.8, thick:1.2, hubR:3.0 },
+  center: { x:-13.63, z:-4.96,  wheelY:3.0, pinionY:1.7, teeth:60, tipR:10,  rootR:8.9,  thick:1.2, hubR:2.4, pTeeth:8, pTip:1.6, pRoot:1.05, spoke:true },
+  third:  { x:-5.5,   z:-13.1,  wheelY:4.5, pinionY:3.0, teeth:48, tipR:8.5, rootR:7.4,  thick:1.1, hubR:2.1, pTeeth:8, pTip:1.5, pRoot:1.0,  spoke:true },
+  fourth: { x:1.57,   z:-6.03,  wheelY:6.0, pinionY:4.5, teeth:36, tipR:7,   rootR:6.0,  thick:1.0, hubR:1.9, pTeeth:8, pTip:1.5, pRoot:1.0,  spoke:true },
+  escape: { x:-4.44,  z:-0.02,  wheelY:7.5, pinionY:6.0, teeth:15, tipR:3.6, rootR:2.7,  thick:0.9, hubR:1.4, pTeeth:8, pTip:1.5, pRoot:1.0, escape:true },
+};
+const forkPiv = { x:-1, z:3, y:7.5 };
+const balancePos = { x:6, z:10, y:9.2 };
+
+/* explode registry: each entry {obj, ass:Vector3, exp:Vector3} */
+const parts = [];
+function reg(obj, ass, exp){ obj.userData.ass = ass.clone(); obj.userData.exp = exp.clone(); parts.push(obj); }
+const C = new THREE.Vector2(-3, -1); // movement centroid for radial spread
+function explodeOffset(x, z, yLift, radial){
+  const d = new THREE.Vector2(x, z).sub(C);
+  if(d.lengthSq() < 1e-4) d.set(0,1); d.normalize();
+  return new THREE.Vector3(d.x*radial, yLift, d.y*radial);
+}
+
+/* ---------- mainplate --------------------------------------------- */
+const plate = new THREE.Group();
+const plateDisc = new THREE.Mesh(new THREE.CylinderGeometry(27, 27, 2.2, 80), M.plate);
+plateDisc.position.y = -0.1; plate.add(plateDisc);
+const plateRim = new THREE.Mesh(new THREE.CylinderGeometry(27.4, 27.4, 1.4, 80), M.brassD);
+plateRim.position.y = -0.4; plate.add(plateRim);
+const plateInner = new THREE.Mesh(new THREE.CylinderGeometry(24.5, 24.5, 2.26, 80), M.brassD);
+plateInner.position.y = -0.05; plate.add(plateInner);
+scene.add(plate);
+reg(plate, new THREE.Vector3(0,0,0), new THREE.Vector3(0,-6,0));
+
+// jewels + screws on the plate at every pivot
+for(const k in A){ addJewel(plate, A[k].x, A[k].z, 1.05, k==='barrel'?2.0:1.2); }
+addJewel(plate, forkPiv.x, forkPiv.z, 1.05, 1.0);
+addJewel(plate, balancePos.x, balancePos.z, 1.05, 1.3);
+for(let i=0;i<6;i++){ const a=i*Math.PI/3; addScrew(plate, Math.cos(a)*24, Math.sin(a)*24, 1.05, 1.1); }
+
+/* ---------- barrel (mainspring drum) ------------------------------ */
+const barrel = new THREE.Group();
+const bcfg = A.barrel;
+barrel.add(gearMesh(bcfg.teeth, bcfg.tipR, bcfg.rootR, bcfg.thick, M.brass, bcfg.hubR));
+const drum = new THREE.Mesh(new THREE.CylinderGeometry(bcfg.rootR*0.96, bcfg.rootR*0.96, bcfg.thick*1.05, 48), M.brassD);
+barrel.add(drum);
+const mainSpring = new THREE.Mesh(
+  new THREE.TubeGeometry(new Spiral(3.0, bcfg.rootR*0.92, 6.5), 260, 0.26, 8, false), M.spring);
+mainSpring.position.y = 0; barrel.add(mainSpring);
+const arbor = new THREE.Mesh(new THREE.CylinderGeometry(bcfg.hubR*0.5, bcfg.hubR*0.5, bcfg.thick*1.6, 16), M.steel);
+barrel.add(arbor);
+barrel.position.set(bcfg.x, bcfg.wheelY, bcfg.z);
+scene.add(barrel);
+reg(barrel, barrel.position.clone(), barrel.position.clone().add(explodeOffset(bcfg.x,bcfg.z,5,6)));
+
+/* ---------- train arbors (center, third, fourth, escape) ---------- */
+const arbors = {};
+for(const k of ['center','third','fourth','escape']){
+  const c = A[k], g = new THREE.Group();
+  const wcfg = Object.assign({}, c, { mat: M.brass });
+  g.add(makeWheel(wcfg));
+  // pinion on same arbor, at pinionY height
+  const pin = new THREE.Group();
+  pin.add(gearMesh(c.pTeeth, c.pTip, c.pRoot, c.thick*0.9, M.steel, c.pRoot*0.5));
+  pin.position.y = c.pinionY - c.wheelY;
+  g.add(pin);
+  // axle stud (short pivot through the wheel)
+  const stud = new THREE.Mesh(new THREE.CylinderGeometry(0.32,0.32, c.thick*2 + 1.6, 12), M.steel);
+  g.add(stud);
+  g.position.set(c.x, c.wheelY, c.z);
+  scene.add(g);
+  let lift = {center:11, third:17, fourth:23, escape:29}[k];
+  reg(g, g.position.clone(), g.position.clone().add(explodeOffset(c.x,c.z,lift,6)));
+  arbors[k] = g;
+}
+
+/* ---------- pallet fork ------------------------------------------- */
+const fork = new THREE.Group();
+const fmat = M.steelD;
+const armEsc = new THREE.Mesh(new THREE.BoxGeometry(0.7,0.6,4.0), fmat); armEsc.position.z = 2.0; fork.add(armEsc);
+const armBal = new THREE.Mesh(new THREE.BoxGeometry(0.7,0.6,9.6), fmat); armBal.position.z = -4.8; fork.add(armBal);
+// pallet stones (ruby entry / sapphire exit) at the escape-wheel end
+const p1 = new THREE.Mesh(new THREE.BoxGeometry(0.45,0.9,0.6), M.ruby); p1.position.set(0.7,0.05,3.7); fork.add(p1);
+const p2 = new THREE.Mesh(new THREE.BoxGeometry(0.45,0.9,0.6), M.saph); p2.position.set(-0.7,0.05,3.5); fork.add(p2);
+// horns (fork notch) at the balance end
+const h1 = new THREE.Mesh(new THREE.BoxGeometry(0.5,0.6,1.4), fmat); h1.position.set(0.7,0,-9.0); fork.add(h1);
+const h2 = new THREE.Mesh(new THREE.BoxGeometry(0.5,0.6,1.4), fmat); h2.position.set(-0.7,0,-9.0); fork.add(h2);
+const guard = new THREE.Mesh(new THREE.BoxGeometry(0.35,0.6,1.0), fmat); guard.position.set(0,0,-9.9); fork.add(guard);
+const fboss = new THREE.Mesh(new THREE.CylinderGeometry(0.7,0.7,1.4,18), M.steel); fork.add(fboss);
+fork.position.set(forkPiv.x, forkPiv.y, forkPiv.z);
+const forkBaseAim = Math.atan2(A.escape.x - forkPiv.x, A.escape.z - forkPiv.z);
+fork.rotation.y = forkBaseAim;
+scene.add(fork);
+reg(fork, fork.position.clone(), fork.position.clone().add(explodeOffset(forkPiv.x,forkPiv.z,36,5)));
+
+/* ---------- balance wheel + hairspring + cock --------------------- */
+const balance = new THREE.Group();
+const br = 10;
+const bRim = new THREE.Mesh(new THREE.TorusGeometry(br, 0.7, 18, 72), M.blue);
+bRim.rotation.x = Math.PI/2; balance.add(bRim);
+for(let i=0;i<3;i++){ const a=i*Math.PI*2/3;
+  const sp = new THREE.Mesh(new THREE.BoxGeometry(0.35,0.35, br*2-1.4), M.blue);
+  sp.rotation.y = a; balance.add(sp); }
+const bhub = new THREE.Mesh(new THREE.CylinderGeometry(1.2,1.2,1.6,18), M.steel); balance.add(bhub);
+// timing screws around the rim
+for(let i=0;i<8;i++){ const a=i*Math.PI/2.5;
+  const sc = new THREE.Mesh(new THREE.SphereGeometry(0.6, 14, 10), M.goldScrew);
+  sc.position.set(Math.cos(a)*br, 0, Math.sin(a)*br); balance.add(sc); }
+// roller table + impulse pin (below)
+const roller = new THREE.Mesh(new THREE.CylinderGeometry(2.4,2.4,0.4,22), M.steelD);
+roller.position.y = -1.3; balance.add(roller);
+const impulsePin = new THREE.Mesh(new THREE.CylinderGeometry(0.22,0.22,1.1,10), M.ruby);
+impulsePin.position.set(2.3, -1.3, 0); balance.add(impulsePin);
+balance.position.set(balancePos.x, balancePos.y, balancePos.z);
+scene.add(balance);
+reg(balance, balance.position.clone(), balance.position.clone().add(explodeOffset(balancePos.x,balancePos.z,44,5)));
+
+// hairspring (own object — fixed outer stud, does not rotate with balance)
+const hairR = 9;
+const hair = new THREE.Mesh(
+  new THREE.TubeGeometry(new Spiral(2.4, hairR, 5.5), 240, 0.17, 7, false), M.spring);
+hair.position.set(balancePos.x, balancePos.y+0.7, balancePos.z);
+scene.add(hair);
+reg(hair, hair.position.clone(), hair.position.clone().add(explodeOffset(balancePos.x,balancePos.z,48,5)));
+
+// balance cock (bridge arm over the balance pivot)
+const cock = new THREE.Group();
+const cockBoss = new THREE.Mesh(new THREE.CylinderGeometry(2.1,2.1,1.0,22), M.brassD);
+cock.add(cockBoss);
+const cockJewel = new THREE.Mesh(new THREE.CylinderGeometry(1.0,1.0,0.7,16), M.ruby);
+cockJewel.position.y = -0.6; cock.add(cockJewel);
+const cockDir = new THREE.Vector2(balancePos.x - C.x, balancePos.z - C.y).normalize();
+const armLen = 13;
+const cockArm = new THREE.Mesh(new THREE.BoxGeometry(armLen, 0.8, 1.7), M.brassD);
+cockArm.position.set(cockDir.x*armLen/2, -0.2, cockDir.y*armLen/2);
+cockArm.rotation.y = Math.atan2(cockDir.x, cockDir.y);
+cock.add(cockArm);
+const cockScrew = new THREE.Mesh(new THREE.CylinderGeometry(0.9,0.9,0.7,16), M.goldScrew);
+cockScrew.position.set(cockDir.x*armLen, -0.3, cockDir.y*armLen); cock.add(cockScrew);
+cock.position.set(balancePos.x, balancePos.y+2.6, balancePos.z);
+scene.add(cock);
+reg(cock, cock.position.clone(), cock.position.clone().add(explodeOffset(balancePos.x,balancePos.z,53,5)));
+
+/* ---------- timing / escapement math ------------------------------ */
+const BPH = 21600;
+const beatsPerSec = BPH / 3600;     // 6
+const oscFreq  = beatsPerSec / 2;   // 3 Hz (one oscillation = 2 beats)
+const balanceAmp = 1.05;            // rad (~60° swing)
+const forkAmp = 0.11;               // rad fork banking
+const T_ESCAPE = 15;                // escape-wheel teeth
+const dEscape = (Math.PI*2)/T_ESCAPE;          // one tooth per beat
+const dFourth = dEscape * (A.escape.pTip / A.fourth.tipR);
+const dThird  = dFourth * (A.fourth.pTip / A.third.tipR);
+const dCenter = dThird  * (A.third.pTip  / A.center.tipR);
+const dBarrel = dCenter * (A.center.pTip / A.barrel.tipR);
+
+let running = true, simTime = 0, lastBeat = -1;
+const ang   = { barrel:0, center:0, third:0, fourth:0, escape:0 };
+const tgt   = { barrel:0, center:0, third:0, fourth:0, escape:0 };
+let forkCur = 0, forkTgt = forkAmp;
+
+const tickdot = document.getElementById('tickdot');
+function flashTick(){ tickdot.classList.remove('flash'); void tickdot.offsetWidth; tickdot.classList.add('flash'); }
+
+/* ---------- UI: explode slider ------------------------------------ */
+const slider = document.getElementById('explode');
+const exval  = document.getElementById('exval');
+function updateExplode(t){
+  for(const p of parts){
+    p.position.lerpVectors(p.userData.ass, p.userData.exp, t);
+  }
+}
+slider.addEventListener('input', () => { exval.textContent = Math.round(slider.value*100)+'%'; });
+exval.textContent = '0%';
+
+/* ---------- UI: play / pause -------------------------------------- */
+const playBtn = document.getElementById('play');
+function setRunning(r){ running = r; playBtn.innerHTML = r ? '❚❚&nbsp;PAUSE' : '▶&nbsp;RUN'; }
+playBtn.addEventListener('click', () => setRunning(!running));
+addEventListener('keydown', e => { if(e.code==='Space'){ e.preventDefault(); setRunning(!running); } });
+
+/* ---------- resize ------------------------------------------------ */
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+/* ---------- main loop --------------------------------------------- */
+const clock = new THREE.Clock();
+function animate(){
+  requestAnimationFrame(animate);
+  let dt = clock.getDelta(); if(dt > 0.05) dt = 0.05;
+
+  if(running) simTime += dt;
+
+  // balance: continuous sinusoidal oscillation @ 3 Hz
+  balance.rotation.y = balanceAmp * Math.sin(2*Math.PI*oscFreq*simTime);
+
+  // beat = every balance centre-crossing (6/sec)
+  const beat = Math.floor(simTime * beatsPerSec);
+  if(beat !== lastBeat){
+    lastBeat = beat;
+    tgt.escape += dEscape;
+    tgt.fourth -= dFourth;   // meshing wheels rotate opposite ways
+    tgt.third  += dThird;
+    tgt.center -= dCenter;
+    tgt.barrel += dBarrel;
+    forkTgt = (beat % 2 === 0) ? forkAmp : -forkAmp;
+    flashTick();
+  }
+
+  // crisp-but-smooth tick: ease wheels toward target (≈12 ms time constant)
+  const k = 1 - Math.exp(-dt/0.012);
+  for(const key in ang){ ang[key] += (tgt[key]-ang[key]) * k; }
+  barrel.rotation.y      = ang.barrel;
+  arbors.center.rotation.y = ang.center;
+  arbors.third.rotation.y  = ang.third;
+  arbors.fourth.rotation.y = ang.fourth;
+  arbors.escape.rotation.y = ang.escape;
+
+  forkCur += (forkTgt - forkCur) * (1 - Math.exp(-dt/0.02));
+  fork.rotation.y = forkBaseAim + forkCur;
+
+  updateExplode(parseFloat(slider.value));
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
